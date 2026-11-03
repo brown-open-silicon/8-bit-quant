@@ -1,0 +1,4 @@
+[submodule "third_party/coralnpu"]
+	path = third_party/coralnpu
+	url = https://github.com/google-coral/coralnpu.git
+	shallow = true

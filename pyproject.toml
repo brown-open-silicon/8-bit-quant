@@ -1,0 +1,6 @@
+[project]
+name = "bos-quant"
+version = "0.1.0"
+description = "Quantization + fault-injection experiments and golden vectors for the BOS accelerator"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26"]
