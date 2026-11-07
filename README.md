@@ -36,6 +36,8 @@ make shell   # interactive shell in the EDA container
 | `rtl/array_ternary.sv` | **16×16 ternary systolic array**: skew/deskew, valid pipeline, sticky bit-flip flag |
 | `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
 | `rtl/postproc.sv` | Requantize int32 → int8: `(acc·m + bias) >> sh`, round, ReLU, clamp (integer-only, no float) |
+| `rtl/wb_npu.sv` | **Wishbone host interface** (Caravel's bus): memory-mapped registers for weights, activations, config, results, status/irq |
+| `tb/npu_driver.py` | Reference "firmware": runs layers using only bus reads/writes (port to C for Caravel) |
 | `rtl/core_ternary.sv` | Array + accumulator + postproc; `{first, addr}` tags ride a 31-cycle delay line with the data |
 | `tb/` | cocotb tests + golden vectors |
 | `synth/area.sh` | yosys → `sky130_fd_sc_hd` (tt 1.8 V) by default, or GF180 `gf180mcu_fd_sc_mcu7t5v0` with `PDK=gf180mcuD` |
@@ -82,7 +84,11 @@ imagery) and a small CNN. The bit-flip model is uniform random flips in stored w
 layer 1 (8 neuron groups × 49 chunks) → requant + ReLU → layer 2 (8 chunks) → logits.
 For 32 test images, every hidden activation and logit matches Python bit-for-bit, and 32/32 are classified correctly.
 The integer-only Python model (`int_forward_fixed`, exactly what the chip computes) scores **96.70%** on 2,000 test images,
-the same as the float-scale version. The host still sequences the tiles (the controller is next).
+the same as the float-scale version.
+
+`test_wb.full_model_bus` runs the same network **through the Wishbone bus only**, the way Caravel's RISC-V
+core would, using `tb/npu_driver.py` as firmware: 16 images bit-exact, 16/16 correct, ~3,300 bus accesses per image.
+The bus is now the bottleneck (the array idles while the CPU pushes data); a DMA or wider feed is the fix.
 
 ## Coral NPU notes
 - Chisel + SystemVerilog, built with **Bazel 8.6** (not installed; their CI uses `utils/coralnpu.dockerfile`, linux/amd64).
@@ -98,4 +104,5 @@ the same as the float-scale version. The host still sequences the tiles (the con
    ~~On-chip accumulator~~ done: `core_ternary` sums all 49 K-tiles on chip, bit-exact.
    Next: move the accumulator to SRAM, weight/activation SRAM feeding the array, INT8 array for comparison.
 4. SRAM wrapper around `gf180mcu_fd_ip_sram__sram512x8m8wm1` + error counter (doubles as a radiation monitor).
-5. LibreLane hardening of the PE/array for real post-route area and timing on Sky130.
+5. LibreLane hardening of the PE/array for real post-route area and timing on Sky130 (`pnr/core_ternary`, in progress).
+6. Put `wb_npu` in Caravel's `user_project_wrapper`; port `npu_driver.py` to C firmware; precheck.

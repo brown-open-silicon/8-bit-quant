@@ -8,3 +8,4 @@ results.xml
 *.vcd
 *.fst
 HANDOFF.md
+pnr/*/runs/
