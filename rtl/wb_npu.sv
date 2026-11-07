@@ -38,6 +38,10 @@ module wb_npu #(
     parameter int N   = 16,
     parameter int B_W = 48
 ) (
+`ifdef USE_POWER_PINS
+    inout  wire         vccd1,        // 1.8 V
+    inout  wire         vssd1,        // ground
+`endif
     input  logic        wb_clk_i,
     input  logic        wb_rst_i,     // active high (Caravel convention)
     input  logic        wbs_stb_i,

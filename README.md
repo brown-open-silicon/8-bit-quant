@@ -37,6 +37,8 @@ make shell   # interactive shell in the EDA container
 | `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
 | `rtl/postproc.sv` | Requantize int32 → int8: `(acc·m + bias) >> sh`, round, ReLU, clamp (integer-only); `P` lanes per cycle |
 | `rtl/wb_npu.sv` | **Wishbone host interface** (Caravel's bus): memory-mapped registers for weights, activations, config, results, status/irq; 1 KB SRAM weight buffer |
+| `firmware/npu.{h,c}` | **C firmware** for Caravel's RISC-V core (port of `tb/npu_driver.py`); 912 B of code on RV32 |
+| `tb/test_firmware.py` | Runs that exact C file against the RTL (host build, register accesses bridged into cocotb) |
 | `rtl/macros/` | Simulation model of the stock Sky130 SRAM macro (`sky130_sram_1kbyte_1rw1r_32x256_8`, OpenRAM, Apache-2.0) |
 | `tb/npu_driver.py` | Reference "firmware": runs layers using only bus reads/writes (port to C for Caravel) |
 | `rtl/core_ternary.sv` | Array + accumulator + postproc; `{first, addr}` tags ride a 31-cycle delay line with the data |
@@ -103,6 +105,9 @@ core would, using `tb/npu_driver.py` as firmware: 16 images bit-exact, 16/16 cor
 | SRAM weight buffer | 2,609 (−23%) | 6,129 (−10%) |
 
 Activations are now most of the remaining traffic (5 bus writes per image per tile); a DMA or wider feed is the fix.
+`test_firmware.firmware_full_model` runs the network from **`firmware/npu.c`**, the C code that would run on Caravel's
+CPU: compiled for the host, every register access becomes a real bus cycle on the simulated chip. 16/16 bit-exact.
+
 `test_wb.sram_bitflip` flips a stored bit inside the SRAM (`01`→`11`) and checks the array flags it on load.
 
 ## Coral NPU notes
@@ -121,4 +126,4 @@ Activations are now most of the remaining traffic (5 bus writes per image per ti
    INT8 array for comparison.
 4. Error counter on the weight SRAM (doubles as a radiation monitor); ECC or scrubbing for the stored weights.
 5. LibreLane hardening of the PE/array for real post-route area and timing on Sky130 (`pnr/core_ternary`, in progress).
-6. Put `wb_npu` in Caravel's `user_project_wrapper`; port `npu_driver.py` to C firmware; precheck.
+6. Put `wb_npu` in Caravel's `user_project_wrapper`; ~~port `npu_driver.py` to C firmware~~ done (`firmware/`); precheck.
