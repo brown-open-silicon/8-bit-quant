@@ -6,8 +6,9 @@ from cocotb.triggers import FallingEdge
 
 N = 16
 ID, STATUS, CTRL, W_DATA, W_LOAD = 0x000, 0x004, 0x008, 0x00C, 0x010
-A_VEC, PUSH, PP_CFG, READ = 0x014, 0x024, 0x028, 0x02C
-Q, WIDE, BIAS = 0x040, 0x080, 0x100
+A_VEC, PUSH, PP_CFG, READ, W_TILE = 0x014, 0x024, 0x028, 0x02C, 0x030
+Q, WIDE, BIAS, WMEM = 0x040, 0x080, 0x100, 0x400
+WMEM_TILES = 16                       # 1 KB SRAM = 256 rows = 16 tiles
 BUSY, ERR, OVF, READY = 1, 2, 4, 8
 
 
@@ -42,6 +43,19 @@ class Npu:
         self.n_access += 1
         return out
 
+    async def _cycle_sel(self, addr, data, sel):
+        """Write with a byte mask (wbs_sel_i)."""
+        d = self.dut
+        d.wbs_adr_i.value, d.wbs_we_i.value, d.wbs_dat_i.value = addr, 1, data
+        d.wbs_sel_i.value, d.wbs_stb_i.value, d.wbs_cyc_i.value = sel, 1, 1
+        while True:
+            await FallingEdge(d.wb_clk_i)
+            if d.wbs_ack_o.value == 1:
+                break
+        d.wbs_stb_i.value = d.wbs_cyc_i.value = d.wbs_we_i.value = 0
+        await FallingEdge(d.wb_clk_i)
+        self.n_access += 1
+
     async def write(self, addr, data):
         await self._cycle(addr, True, data)
 
@@ -49,14 +63,28 @@ class Npu:
         return await self._cycle(addr, False)
 
     # ---------------------------------------------------------- NPU operations
+    @staticmethod
+    def pack_row(codes):
+        word = 0
+        for n, c in enumerate(codes):
+            word |= (c & 3) << (2 * n)
+        return word
+
     async def load_weights(self, w_codes):
         """w_codes[k][n] = 2-bit code for W[k][n]."""
         for k in range(N):
-            word = 0
-            for n, c in enumerate(w_codes[k]):
-                word |= (c & 3) << (2 * n)
-            await self.write(W_DATA, word)
+            await self.write(W_DATA, self.pack_row(w_codes[k]))
             await self.write(W_LOAD, k)
+
+    async def store_tile(self, slot, w_codes):
+        """Write a tile into weight-buffer slot 0..15 (16 bus writes)."""
+        for k in range(N):
+            await self.write(WMEM + 4 * (N * slot + k), self.pack_row(w_codes[k]))
+
+    async def load_tile(self, slot):
+        """Stream slot into the array: 1 bus write, 16 cycles. The bus itself
+        waits until in-flight results are out, so no STATUS polling."""
+        await self.write(W_TILE, slot)
 
     async def push(self, a, row, first):
         for i in range(4):
@@ -89,18 +117,32 @@ class Npu:
             out += [_s(w >> (8 * j), 8) for j in range(4)]
         return out
 
-    async def dense(self, x_rows, w_codes, m, sh, bias, relu, wide=False):
-        """One full layer for up to 16 input vectors."""
+    async def dense(self, x_rows, w_codes, m, sh, bias, relu, wide=False, wmem=False):
+        """One full layer for up to 16 input vectors.
+        wmem=False: weights row by row through W_DATA/W_LOAD, poll busy per tile.
+        wmem=True:  weights staged in the SRAM buffer 16 tiles at a time."""
         n_vec, n_in, n_out = len(x_rows), len(x_rows[0]), len(w_codes)
         out = [[] for _ in range(n_vec)]
         for n0 in range(0, n_out, N):
-            for t, k0 in enumerate(range(0, n_in, N)):
-                tile = [[w_codes[n0 + n][k0 + k] if n0 + n < n_out else 0 for n in range(N)]
-                        for k in range(N)]
-                await self.load_weights(tile)
-                for i, x in enumerate(x_rows):
-                    await self.push(x[k0:k0 + N], i, first=(t == 0))
-                await self.wait_idle()
+            tiles = [[[w_codes[n0 + n][k0 + k] if n0 + n < n_out else 0 for n in range(N)]
+                      for k in range(N)] for k0 in range(0, n_in, N)]
+            for c0 in range(0, len(tiles), WMEM_TILES if wmem else 1):
+                chunk = tiles[c0:c0 + (WMEM_TILES if wmem else 1)]
+                if wmem:
+                    for slot, tile in enumerate(chunk):
+                        await self.store_tile(slot, tile)
+                for slot, tile in enumerate(chunk):
+                    t = c0 + slot
+                    k0 = N * t
+                    if wmem:
+                        await self.load_tile(slot)
+                    else:
+                        await self.load_weights(tile)
+                    for i, x in enumerate(x_rows):
+                        await self.push(x[k0:k0 + N], i, first=(t == 0))
+                    if not wmem:
+                        await self.wait_idle()
+            await self.wait_idle()
             b = [bias[n0 + n] if n0 + n < n_out else 0 for n in range(N)]
             await self.configure(m, sh, relu, b)
             keep = min(N, n_out - n0)

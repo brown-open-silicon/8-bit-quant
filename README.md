@@ -36,7 +36,8 @@ make shell   # interactive shell in the EDA container
 | `rtl/array_ternary.sv` | **16×16 ternary systolic array**: skew/deskew, valid pipeline, sticky bit-flip flag |
 | `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
 | `rtl/postproc.sv` | Requantize int32 → int8: `(acc·m + bias) >> sh`, round, ReLU, clamp (integer-only); `P` lanes per cycle |
-| `rtl/wb_npu.sv` | **Wishbone host interface** (Caravel's bus): memory-mapped registers for weights, activations, config, results, status/irq |
+| `rtl/wb_npu.sv` | **Wishbone host interface** (Caravel's bus): memory-mapped registers for weights, activations, config, results, status/irq; 1 KB SRAM weight buffer |
+| `rtl/macros/` | Simulation model of the stock Sky130 SRAM macro (`sky130_sram_1kbyte_1rw1r_32x256_8`, OpenRAM, Apache-2.0) |
 | `tb/npu_driver.py` | Reference "firmware": runs layers using only bus reads/writes (port to C for Caravel) |
 | `rtl/core_ternary.sv` | Array + accumulator + postproc; `{first, addr}` tags ride a 31-cycle delay line with the data |
 | `tb/` | cocotb tests + golden vectors |
@@ -64,7 +65,11 @@ make shell   # interactive shell in the EDA container
 | **`core_ternary`** (array + accumulator + postproc) | **66,535** | **0.86 mm²** | — |
 | **`wb_npu`** (core + Wishbone registers) | **85,552** | **0.99 mm²** | — |
 
-- The 8 Kb accumulator built from flip-flops is as big as the whole array. It should become SRAM.
+- The 8 Kb accumulator built from flip-flops is as big as the whole array, but it **stays in flops**: it does a
+  512-bit read-modify-write every cycle, and the stock SRAM macro is 32 bits wide. Matching that bandwidth would take
+  16 macros (~3 mm²) vs 0.39 mm² of flops.
+- The SRAM goes where its width fits: the **weight buffer**. One weight row (16 × 2 bits) is exactly one 32-bit word,
+  so the 1 KB macro (0.19 mm²) holds 16 tiles and streams a row into the array every cycle.
 - `postproc` runs once per output row, so it time-shares one multiplier (`P=1`); `P=4`/`P=16` trade area back for speed.
 
 Takeaways:
@@ -88,8 +93,17 @@ The integer-only Python model (`int_forward_fixed`, exactly what the chip comput
 the same as the float-scale version.
 
 `test_wb.full_model_bus` runs the same network **through the Wishbone bus only**, the way Caravel's RISC-V
-core would, using `tb/npu_driver.py` as firmware: 16 images bit-exact, 16/16 correct, ~3,300 bus accesses per image.
-The bus is now the bottleneck (the array idles while the CPU pushes data); a DMA or wider feed is the fix.
+core would, using `tb/npu_driver.py` as firmware: 16 images bit-exact, 16/16 correct.
+`test_wb.full_model_wmem` does the same with weights staged in the SRAM buffer (write 16 tiles, then one
+`W_TILE` write streams each into the array; the bus waits instead of the CPU polling):
+
+| 16 images, MNIST 784-128-10 | bus accesses / image | cycles / image |
+|---|---|---|
+| direct weights (`W_DATA`/`W_LOAD`) | 3,400 | 6,800 |
+| SRAM weight buffer | 2,609 (−23%) | 6,129 (−10%) |
+
+Activations are now most of the remaining traffic (5 bus writes per image per tile); a DMA or wider feed is the fix.
+`test_wb.sram_bitflip` flips a stored bit inside the SRAM (`01`→`11`) and checks the array flags it on load.
 
 ## Coral NPU notes
 - Chisel + SystemVerilog, built with **Bazel 8.6** (not installed; their CI uses `utils/coralnpu.dockerfile`, linux/amd64).
@@ -103,7 +117,8 @@ The bus is now the bottleneck (the array idles while the CPU pushes data); a DMA
 2. More fault-injection trials and fault models (multi-bit upsets, activations/accumulators, not just weights).
 3. ~~16×16 ternary systolic array~~ done: computes real MNIST layer-1 outputs (49 tiles) bit-exact vs. Python.
    ~~On-chip accumulator~~ done: `core_ternary` sums all 49 K-tiles on chip, bit-exact.
-   Next: move the accumulator to SRAM, weight/activation SRAM feeding the array, INT8 array for comparison.
-4. SRAM wrapper around `gf180mcu_fd_ip_sram__sram512x8m8wm1` + error counter (doubles as a radiation monitor).
+   ~~Weight SRAM~~ done: stock Sky130 1 KB macro as a weight buffer, bit-exact. Next: activation buffer / DMA,
+   INT8 array for comparison.
+4. Error counter on the weight SRAM (doubles as a radiation monitor); ECC or scrubbing for the stored weights.
 5. LibreLane hardening of the PE/array for real post-route area and timing on Sky130 (`pnr/core_ternary`, in progress).
 6. Put `wb_npu` in Caravel's `user_project_wrapper`; port `npu_driver.py` to C firmware; precheck.

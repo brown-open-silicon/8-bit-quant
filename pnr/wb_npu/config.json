@@ -1,0 +1,27 @@
+{
+  "DESIGN_NAME": "wb_npu",
+  "VERILOG_FILES": [
+    "dir::../../rtl/pe_ws_ternary.sv",
+    "dir::../../rtl/array_ternary.sv",
+    "dir::../../rtl/accum_buf.sv",
+    "dir::../../rtl/postproc.sv",
+    "dir::../../rtl/core_ternary.sv",
+    "dir::../../rtl/wb_npu.sv"
+  ],
+  "USE_SYNLIG": false,
+  "CLOCK_PORT": "wb_clk_i",
+  "CLOCK_PERIOD": 25,
+  "FP_SIZING": "relative",
+  "FP_CORE_UTIL": 45,
+  "PL_TARGET_DENSITY_PCT": 55,
+  "RUN_LINTER": false,
+  "RUN_KLAYOUT_XOR": false,
+  "RUN_LVS": false,
+  "RUN_MAGIC_DRC": false,
+  "RUN_KLAYOUT_DRC": false,
+  "RUN_IRDROP_REPORT": false,
+  "GRT_ALLOW_CONGESTION": true,
+  "QUIT_ON_SYNTH_CHECKS": false,
+  "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+  "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true
+}
