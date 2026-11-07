@@ -4,7 +4,7 @@
 set -euo pipefail
 LIB=$PDK_ROOT/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib
 mkdir -p build/synth
-for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary}; do
+for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf core_ternary}; do
   yosys -q -l build/synth/$top.log -p "
     read_verilog -sv rtl/*.sv
     synth -top $top -flatten

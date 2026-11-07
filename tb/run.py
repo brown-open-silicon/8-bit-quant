@@ -11,22 +11,29 @@ from cocotb_tools.runner import get_results, get_runner
 ROOT = Path(__file__).resolve().parents[1]
 RTL = ROOT / "rtl"
 
-# top -> (rtl sources, cocotb test module)
+# name -> (rtl sources, cocotb test module[, top, parameters])
 TESTS = {
     "mac_int8":      (["mac_int8.sv"], "test_pe"),
     "pe_ternary":    (["pe_ternary.sv"], "test_pe"),
     "array_ternary": (["pe_ws_ternary.sv", "array_ternary.sv"], "test_array"),
+    "core_ternary":  (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
+                       "core_ternary.sv"], "test_core"),
+    "accum_narrow":  (["accum_buf.sv"], "test_accum", "accum_buf",
+                      {"N": 4, "IN_W": 16, "ACC_W": 16, "DEPTH": 4}),
 }
 
 failed = 0
-for top in sys.argv[1:] or TESTS:
-    sources, module = TESTS[top]
+for name in sys.argv[1:] or TESTS:
+    sources, module, *rest = TESTS[name]
+    top = rest[0] if rest else name
+    params = rest[1] if len(rest) > 1 else {}
     runner = get_runner("icarus")
-    build_dir = ROOT / "build" / "sim" / top
+    build_dir = ROOT / "build" / "sim" / name
     runner.build(
         sources=[RTL / s for s in sources],
         hdl_toplevel=top,
         build_dir=build_dir,
+        parameters=params,
         timescale=("1ns", "1ps"),
         always=True,
     )

@@ -34,6 +34,8 @@ make shell   # interactive shell in the EDA container
 | `rtl/pe_ternary.sv` | Ternary PE: add/sub/skip, flags invalid code `11` as a bit flip |
 | `rtl/pe_ws_ternary.sv` | Weight-stationary ternary PE (array building block) |
 | `rtl/array_ternary.sv` | **16×16 ternary systolic array**: skew/deskew, valid pipeline, sticky bit-flip flag |
+| `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
+| `rtl/core_ternary.sv` | Array + accumulator; `{first, addr}` tags ride a 31-cycle delay line with the data |
 | `tb/` | cocotb tests + golden vectors |
 | `synth/area.sh` | yosys → GF180 `gf180mcu_fd_sc_mcu7t5v0` cells, typical corner 5 V |
 | `scripts/eda.sh` | Run anything inside the EDA container |
@@ -54,6 +56,10 @@ make shell   # interactive shell in the EDA container
 | `pe_ternary` | 311 | 7,325 µm² (**2.6× smaller**) |
 | `pe_ws_ternary` (16-bit psum) | 154 | 4,395 µm² |
 | **`array_ternary` 16×16** | **37,970** | **1.26 mm²** (logic only, before place & route) |
+| `accum_buf` (16 rows × 16 lanes × int32, flops) | 33,840 | 1.19 mm² |
+| **`core_ternary`** (array + accumulator) | **70,639** | **2.43 mm²** |
+
+The 8 Kb accumulator built from flip-flops is as big as the whole array. It should become SRAM.
 
 Takeaways:
 - **Memory dominates on GF180.** The biggest PDK SRAM macro is 512 bytes, about 0.21 mm². An int8 model this size
@@ -78,6 +84,7 @@ imagery) and a small CNN. The bit-flip model is uniform random flips in stored w
 1. Pick the real workload + dataset; replace MNIST with a small CNN.
 2. More fault-injection trials and fault models (multi-bit upsets, activations/accumulators, not just weights).
 3. ~~16×16 ternary systolic array~~ done: computes real MNIST layer-1 outputs (49 tiles) bit-exact vs. Python.
-   Next: on-chip accumulator for K-tiling, weight/activation SRAM feeding it, INT8 array for comparison.
+   ~~On-chip accumulator~~ done: `core_ternary` sums all 49 K-tiles on chip, bit-exact.
+   Next: move the accumulator to SRAM, weight/activation SRAM feeding the array, INT8 array for comparison.
 4. SRAM wrapper around `gf180mcu_fd_ip_sram__sram512x8m8wm1` + error counter (doubles as a radiation monitor).
 5. LibreLane hardening of the PE/array for real post-route area and timing on GF180.
