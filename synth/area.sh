@@ -13,7 +13,7 @@ esac
 OUT=build/synth/$PDK
 mkdir -p $OUT
 echo "PDK: $PDK"
-for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf core_ternary}; do
+for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf postproc core_ternary}; do
   yosys -q -l $OUT/$top.log -p "
     read_verilog -sv rtl/*.sv
     synth -top $top -flatten

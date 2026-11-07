@@ -81,3 +81,33 @@ def flip_bits(codes: np.ndarray, fmt: str, p: float, rng) -> np.ndarray:
 
 def memory_bytes(n_weights: int, fmt: str) -> float:
     return n_weights * FORMATS[fmt] / 8
+
+
+# ---------------------------------------------------------------- requantize
+# The chip has no floating point. After a layer, the int32 accumulator is
+# turned back into an int8 activation with one multiply, one add, one shift:
+#
+#     y = (acc * m + b + 2^(sh-1)) >> sh        (>> = arithmetic shift, rounds)
+#     out = clamp(y, 0 or -127, 127)            (ReLU = lower bound 0)
+#
+# m (signed 16-bit) and sh encode the float multiplier M ~= m / 2^sh;
+# b (signed 48-bit) is the per-neuron bias already scaled by 2^sh.
+M_BITS, B_BITS = 16, 48
+
+
+def fixed_multiplier(M: float):
+    """Float multiplier -> (m, sh) with m as many bits as fit in signed 16."""
+    assert M > 0
+    sh = 0
+    while round(M * 2 ** (sh + 1)) < 2 ** (M_BITS - 1) and sh < 40:
+        sh += 1
+    return int(round(M * 2 ** sh)), sh
+
+
+def requant(acc, m: int, b, sh: int, relu: bool):
+    """Bit-exact model of rtl/postproc.sv. Returns (wide int32, int8)."""
+    acc = np.asarray(acc, dtype=object)
+    y = (acc * m + np.asarray(b, dtype=object) + (1 << (sh - 1))) >> sh
+    wide = np.clip(y, -2 ** 31, 2 ** 31 - 1).astype(np.int64)
+    q = np.clip(y, 0 if relu else -127, 127).astype(np.int32)
+    return wide, q

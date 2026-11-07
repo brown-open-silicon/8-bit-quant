@@ -17,7 +17,8 @@ TESTS = {
     "pe_ternary":    (["pe_ternary.sv"], "test_pe"),
     "array_ternary": (["pe_ws_ternary.sv", "array_ternary.sv"], "test_array"),
     "core_ternary":  (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
-                       "core_ternary.sv"], "test_core"),
+                       "postproc.sv", "core_ternary.sv"], "test_core"),
+    "postproc":      (["postproc.sv"], "test_postproc"),
     "accum_narrow":  (["accum_buf.sv"], "test_accum", "accum_buf",
                       {"N": 4, "IN_W": 16, "ACC_W": 16, "DEPTH": 4}),
 }

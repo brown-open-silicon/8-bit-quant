@@ -35,7 +35,8 @@ make shell   # interactive shell in the EDA container
 | `rtl/pe_ws_ternary.sv` | Weight-stationary ternary PE (array building block) |
 | `rtl/array_ternary.sv` | **16×16 ternary systolic array**: skew/deskew, valid pipeline, sticky bit-flip flag |
 | `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
-| `rtl/core_ternary.sv` | Array + accumulator; `{first, addr}` tags ride a 31-cycle delay line with the data |
+| `rtl/postproc.sv` | Requantize int32 → int8: `(acc·m + bias) >> sh`, round, ReLU, clamp (integer-only, no float) |
+| `rtl/core_ternary.sv` | Array + accumulator + postproc; `{first, addr}` tags ride a 31-cycle delay line with the data |
 | `tb/` | cocotb tests + golden vectors |
 | `synth/area.sh` | yosys → `sky130_fd_sc_hd` (tt 1.8 V) by default, or GF180 `gf180mcu_fd_sc_mcu7t5v0` with `PDK=gf180mcuD` |
 | `scripts/eda.sh` | Run anything inside the EDA container |
@@ -57,9 +58,11 @@ make shell   # interactive shell in the EDA container
 | `pe_ws_ternary` (16-bit psum) | 139 | 1,394 µm² | 4,395 µm² |
 | **`array_ternary` 16×16** | **36,580** | **0.41 mm²** | 1.26 mm² |
 | `accum_buf` (16 rows × 16 lanes × int32, flops) | 24,630 | 0.39 mm² | 1.19 mm² |
-| **`core_ternary`** (array + accumulator) | **58,880** | **0.79 mm²** | 2.43 mm² |
+| `postproc` (16 lanes, 32×16 multiply each) | 53,995 | 0.39 mm² | — |
+| **`core_ternary`** (array + accumulator + postproc) | **113,150** | **1.18 mm²** | — |
 
-The 8 Kb accumulator built from flip-flops is as big as the whole array. It should become SRAM.
+- The 8 Kb accumulator built from flip-flops is as big as the whole array. It should become SRAM.
+- `postproc` runs once per output row, so 16 parallel multipliers is overkill; one time-shared lane would be ~16× smaller.
 
 Takeaways:
 - **Memory dominates.** On GF180 the biggest SRAM macro is 512 bytes, about 0.21 mm². An int8 model this size
@@ -72,6 +75,14 @@ Takeaways:
 
 Caveats: MNIST + MLP is a stand-in. Swap in the real workload (e.g. satellite cloud/wildfire
 imagery) and a small CNN. The bit-flip model is uniform random flips in stored weights only.
+
+## Full model on the RTL
+
+`test_core.full_model_mnist` runs the entire 784-128-10 ternary network on the RTL:
+layer 1 (8 neuron groups × 49 chunks) → requant + ReLU → layer 2 (8 chunks) → logits.
+For 32 test images, every hidden activation and logit matches Python bit-for-bit, and 32/32 are classified correctly.
+The integer-only Python model (`int_forward_fixed`, exactly what the chip computes) scores **96.70%** on 2,000 test images,
+the same as the float-scale version. The host still sequences the tiles (the controller is next).
 
 ## Coral NPU notes
 - Chisel + SystemVerilog, built with **Bazel 8.6** (not installed; their CI uses `utils/coralnpu.dockerfile`, linux/amd64).

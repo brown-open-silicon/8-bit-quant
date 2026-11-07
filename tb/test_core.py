@@ -38,7 +38,7 @@ async def reset(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     for sig in (dut.rst_n, dut.w_load, dut.w_row, dut.w_data, dut.in_valid,
                 dut.in_first, dut.in_addr, dut.a_vec, dut.rd_en, dut.rd_addr,
-                dut.err_clear):
+                dut.err_clear, dut.pp_m, dut.pp_sh, dut.pp_relu, dut.pp_bias):
         sig.value = 0
     await RisingEdge(dut.clk)
     await FallingEdge(dut.clk)
@@ -129,3 +129,76 @@ async def random_multitile(dut):
         got = await run_layer(dut, tiles, addrs)
         assert got == ref_layer(tiles, n_vec), f"trial {trial} mismatch"
     dut._log.info("random multi-tile accumulation matches")
+
+
+# ------------------------------------------------------------ full model
+B_W = 48
+
+
+async def read_requant(dut, addrs, m, sh, bias, relu):
+    """Read accumulator rows through postproc; returns (int32 rows, int8 rows)."""
+    dut.pp_m.value = m & 0xFFFF
+    dut.pp_sh.value = sh
+    dut.pp_relu.value = int(relu)
+    dut.pp_bias.value = pack(bias, B_W)
+    wide, q = [], []
+    for addr in addrs:
+        dut.rd_en.value = 1
+        dut.rd_addr.value = addr
+        await FallingEdge(dut.clk)
+        dut.rd_en.value = 0
+        for _ in range(2):
+            await FallingEdge(dut.clk)
+        assert dut.pp_valid.value == 1
+        wide.append(unpack_signed(int(dut.wide_vec.value), 32, N))
+        q.append(unpack_signed(int(dut.q_vec.value), 8, N))
+    return wide, q
+
+
+def weight_tile(w_codes, n0, k0):
+    """W[k][n] tile from codes[neuron][input]; pads missing neurons with 00 (zero)."""
+    return [[w_codes[n0 + n][k0 + k] if n0 + n < len(w_codes) else 0
+             for n in range(N)] for k in range(N)]
+
+
+async def run_dense(dut, x_rows, w_codes, m, sh, bias, relu):
+    """One full layer: every 16-neuron group x every 16-input chunk."""
+    n_vec, n_in, n_out = len(x_rows), len(x_rows[0]), len(w_codes)
+    addrs = list(range(n_vec))
+    out_w = [[] for _ in range(n_vec)]
+    out_q = [[] for _ in range(n_vec)]
+    for n0 in range(0, n_out, N):
+        for t, k0 in enumerate(range(0, n_in, N)):
+            await load_weights(dut, weight_tile(w_codes, n0, k0))
+            await stream_tile(dut, [r[k0:k0 + N] for r in x_rows], addrs, first=(t == 0))
+        b = [bias[n0 + n] if n0 + n < n_out else 0 for n in range(N)]
+        wide, q = await read_requant(dut, addrs, m, sh, b, relu)
+        keep = min(N, n_out - n0)
+        for i in range(n_vec):
+            out_w[i] += wide[i][:keep]
+            out_q[i] += q[i][:keep]
+    return out_w, out_q
+
+
+@cocotb.test()
+async def full_model_mnist(dut):
+    """The whole 784-128-10 ternary network runs on the RTL:
+    layer 1 (8 neuron groups x 49 chunks) -> requant+ReLU -> layer 2 (8 chunks)
+    -> logits. Must match Python bit-for-bit, then we score the predictions."""
+    await reset(dut)
+    d = json.loads((VECTORS / "e2e_ternary.json").read_text())
+    n_img = len(d["xq"])
+    hq, preds = [], []
+    for b0 in range(0, n_img, DEPTH):                      # 16 images per batch
+        x = d["xq"][b0:b0 + DEPTH]
+        _, h = await run_dense(dut, x, d["w1"], d["m1"], d["sh1"], d["b1"], relu=True)
+        logits, _ = await run_dense(dut, h, d["w2"], d["m2"], d["sh2"], d["b2"], relu=False)
+        assert h == d["hq"][b0:b0 + DEPTH], f"hidden layer mismatch in batch {b0 // DEPTH}"
+        assert logits == d["logits"][b0:b0 + DEPTH], f"logits mismatch in batch {b0 // DEPTH}"
+        hq += h
+        preds += [max(range(10), key=lambda c: row[c]) for row in logits]
+    assert preds == d["pred"]
+    correct = sum(p == y for p, y in zip(preds, d["label"]))
+    assert dut.err.value == 0 and dut.ovf.value == 0
+    dut._log.info(f"full model on RTL: {n_img} images bit-exact vs Python, "
+                  f"{correct}/{n_img} correct ({100 * correct / n_img:.1f}%)")

@@ -1,7 +1,7 @@
-// Ternary compute core = 16x16 systolic array + int32 accumulator buffer.
+// Ternary compute core = 16x16 systolic array + int32 accumulator + requant.
 //
-//   a_vec ──▶ array_ternary ──c_vec──▶ accum_buf ──rd_vec──▶
-//   (addr, first) ──▶ delay line (LAT cycles) ──┘
+//   a_vec ──▶ array_ternary ──c_vec──▶ accum_buf ──rd_vec──▶ postproc ──▶ q_vec (int8)
+//   (addr, first) ──▶ delay line (LAT cycles) ──┘                    └──▶ wide_vec (int32)
 //
 // Each input vector is tagged with:
 //   in_addr  : which accumulator row its result goes to (e.g. image index)
@@ -14,7 +14,8 @@
 //       load weight tile t           (N cycles, w_load)
 //       stream M vectors, addr=i, first=(t==0)
 //       wait for the pipeline to drain before the next weight load
-//   read rows 0..M-1
+//   read rows 0..M-1: rd_vec (raw int32) after 1 cycle,
+//   q_vec / wide_vec (requantized) after 3 cycles (pp_valid)
 //
 // Do not load weights while results are still in flight: the PEs would use
 // the new weights for vectors already inside the array.
@@ -23,6 +24,7 @@ module core_ternary #(
     parameter int PSUM_W = 16,
     parameter int ACC_W  = 32,
     parameter int DEPTH  = 16,
+    parameter int B_W    = 48,
     localparam int AW    = $clog2(DEPTH),
     localparam int LAT   = 2 * N - 1
 ) (
@@ -43,6 +45,14 @@ module core_ternary #(
     input  logic [AW-1:0]         rd_addr,
     output logic                  rd_valid,
     output logic [ACC_W*N-1:0]    rd_vec,
+    // post-processing (requantization) config + output
+    input  logic signed [15:0]    pp_m,
+    input  logic [5:0]            pp_sh,
+    input  logic                  pp_relu,
+    input  logic [B_W*N-1:0]      pp_bias,
+    output logic                  pp_valid,
+    output logic [32*N-1:0]       wide_vec,
+    output logic [8*N-1:0]        q_vec,
     // status
     input  logic                  err_clear,
     output logic                  err,        // bit-flipped weight seen (code 11)
@@ -85,5 +95,12 @@ module core_ternary #(
         .rd_en, .rd_addr, .rd_valid, .rd_vec,
         .ovf_clear(err_clear),
         .ovf
+    );
+
+    postproc #(.N(N), .ACC_W(ACC_W), .B_W(B_W)) u_pp (
+        .clk, .rst_n,
+        .m (pp_m), .sh (pp_sh), .relu (pp_relu), .bias_vec (pp_bias),
+        .in_valid (rd_valid), .in_vec (rd_vec),
+        .out_valid (pp_valid), .wide_vec, .q_vec
     );
 endmodule
