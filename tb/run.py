@@ -20,7 +20,9 @@ TESTS = {
                        "postproc.sv", "core_ternary.sv"], "test_core"),
     "wb_npu":        (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
                        "postproc.sv", "core_ternary.sv", "wb_npu.sv"], "test_wb"),
-    "postproc":      (["postproc.sv"], "test_postproc"),
+    "postproc":      (["postproc.sv"], "test_postproc"),              # P=1 (default)
+    "postproc_p4":   (["postproc.sv"], "test_postproc", "postproc", {"P": 4}),
+    "postproc_p16":  (["postproc.sv"], "test_postproc", "postproc", {"P": 16}),
     "accum_narrow":  (["accum_buf.sv"], "test_accum", "accum_buf",
                       {"N": 4, "IN_W": 16, "ACC_W": 16, "DEPTH": 4}),
 }
@@ -45,7 +47,7 @@ for name in sys.argv[1:] or TESTS:
         test_module=module,
         test_dir=Path(__file__).parent,
         build_dir=build_dir,
-        extra_env={"COCOTB_TOPLEVEL": top},
+        extra_env={"COCOTB_TOPLEVEL": top, "PP_P": str(params.get("P", 1))},
     )
     failed += get_results(results)[1]
 sys.exit(1 if failed else 0)

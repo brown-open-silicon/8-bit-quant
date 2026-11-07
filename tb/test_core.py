@@ -147,9 +147,11 @@ async def read_requant(dut, addrs, m, sh, bias, relu):
         dut.rd_addr.value = addr
         await FallingEdge(dut.clk)
         dut.rd_en.value = 0
-        for _ in range(2):
+        for _ in range(N + 4):
             await FallingEdge(dut.clk)
-        assert dut.pp_valid.value == 1
+            if dut.pp_valid.value == 1:
+                break
+        assert dut.pp_valid.value == 1, "postproc result never arrived"
         wide.append(unpack_signed(int(dut.wide_vec.value), 32, N))
         q.append(unpack_signed(int(dut.q_vec.value), 8, N))
     return wide, q

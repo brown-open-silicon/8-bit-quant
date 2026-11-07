@@ -15,7 +15,8 @@
 //       stream M vectors, addr=i, first=(t==0)
 //       wait for the pipeline to drain before the next weight load
 //   read rows 0..M-1: rd_vec (raw int32) after 1 cycle,
-//   q_vec / wide_vec (requantized) after 3 cycles (pp_valid)
+//   q_vec / wide_vec (requantized) when pp_valid pulses (N+2 cycles with the
+//   default 1-lane postproc); wait for pp_valid before the next rd_en
 //
 // Do not load weights while results are still in flight: the PEs would use
 // the new weights for vectors already inside the array.
@@ -84,7 +85,8 @@ module core_ternary #(
             inflight <= {inflight[LAT-2:0], in_valid};
         end
     end
-    assign busy = |inflight;
+    logic pp_busy;
+    assign busy = |inflight | pp_busy;
 
     accum_buf #(.N(N), .IN_W(PSUM_W), .ACC_W(ACC_W), .DEPTH(DEPTH)) u_acc (
         .clk, .rst_n,
@@ -101,6 +103,7 @@ module core_ternary #(
         .clk, .rst_n,
         .m (pp_m), .sh (pp_sh), .relu (pp_relu), .bias_vec (pp_bias),
         .in_valid (rd_valid), .in_vec (rd_vec),
+        .busy (pp_busy),
         .out_valid (pp_valid), .wide_vec, .q_vec
     );
 endmodule

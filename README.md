@@ -35,7 +35,7 @@ make shell   # interactive shell in the EDA container
 | `rtl/pe_ws_ternary.sv` | Weight-stationary ternary PE (array building block) |
 | `rtl/array_ternary.sv` | **16×16 ternary systolic array**: skew/deskew, valid pipeline, sticky bit-flip flag |
 | `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
-| `rtl/postproc.sv` | Requantize int32 → int8: `(acc·m + bias) >> sh`, round, ReLU, clamp (integer-only, no float) |
+| `rtl/postproc.sv` | Requantize int32 → int8: `(acc·m + bias) >> sh`, round, ReLU, clamp (integer-only); `P` lanes per cycle |
 | `rtl/wb_npu.sv` | **Wishbone host interface** (Caravel's bus): memory-mapped registers for weights, activations, config, results, status/irq |
 | `tb/npu_driver.py` | Reference "firmware": runs layers using only bus reads/writes (port to C for Caravel) |
 | `rtl/core_ternary.sv` | Array + accumulator + postproc; `{first, addr}` tags ride a 31-cycle delay line with the data |
@@ -60,11 +60,12 @@ make shell   # interactive shell in the EDA container
 | `pe_ws_ternary` (16-bit psum) | 139 | 1,394 µm² | 4,395 µm² |
 | **`array_ternary` 16×16** | **36,580** | **0.41 mm²** | 1.26 mm² |
 | `accum_buf` (16 rows × 16 lanes × int32, flops) | 24,630 | 0.39 mm² | 1.19 mm² |
-| `postproc` (16 lanes, 32×16 multiply each) | 53,995 | 0.39 mm² | — |
-| **`core_ternary`** (array + accumulator + postproc) | **113,150** | **1.18 mm²** | — |
+| `postproc` (1 shared multiplier, 16 cycles/row) | 7,059 | 0.075 mm² (was 0.39 with 16 multipliers) | — |
+| **`core_ternary`** (array + accumulator + postproc) | **66,535** | **0.86 mm²** | — |
+| **`wb_npu`** (core + Wishbone registers) | **85,552** | **0.99 mm²** | — |
 
 - The 8 Kb accumulator built from flip-flops is as big as the whole array. It should become SRAM.
-- `postproc` runs once per output row, so 16 parallel multipliers is overkill; one time-shared lane would be ~16× smaller.
+- `postproc` runs once per output row, so it time-shares one multiplier (`P=1`); `P=4`/`P=16` trade area back for speed.
 
 Takeaways:
 - **Memory dominates.** On GF180 the biggest SRAM macro is 512 bytes, about 0.21 mm². An int8 model this size

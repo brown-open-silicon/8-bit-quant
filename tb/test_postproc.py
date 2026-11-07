@@ -12,6 +12,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
 
 N, ACC_W, B_W = 16, 32, 48
+P = int(__import__("os").environ.get("PP_P", "1"))
 VECTORS = Path(__file__).parent / "vectors"
 
 
@@ -44,13 +45,16 @@ async def golden_requant(dut):
         dut.bias_vec.value = pack(c["b"], B_W)
         got_w, got_q = [], []
         for row in c["acc"]:
-            # 2-cycle pipeline: push one row, read it 2 cycles later
             dut.in_valid.value = 1
             dut.in_vec.value = pack(row, ACC_W)
             await FallingEdge(dut.clk)
             dut.in_valid.value = 0
-            await FallingEdge(dut.clk)
-            assert dut.out_valid.value == 1
+            lat = 1
+            while dut.out_valid.value != 1:
+                await FallingEdge(dut.clk)
+                lat += 1
+                assert lat < 40, "out_valid never arrived"
+            assert lat == N // P + 2, f"latency {lat}, expected {N // P + 2}"
             got_w.append(unpack_signed(int(dut.wide_vec.value), 32, N))
             got_q.append(unpack_signed(int(dut.q_vec.value), 8, N))
         assert got_w == c["wide"], f"wide mismatch (m={c['m']}, sh={c['sh']})"
