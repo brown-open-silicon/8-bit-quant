@@ -32,6 +32,8 @@ make shell   # interactive shell in the EDA container
 | `quant/experiment.py` | The experiment: accuracy, memory, GF180 SRAM count, fault tolerance |
 | `rtl/mac_int8.sv` | INT8 multiply-accumulate PE (baseline) |
 | `rtl/pe_ternary.sv` | Ternary PE: add/sub/skip, flags invalid code `11` as a bit flip |
+| `rtl/pe_ws_ternary.sv` | Weight-stationary ternary PE (array building block) |
+| `rtl/array_ternary.sv` | **16×16 ternary systolic array**: skew/deskew, valid pipeline, sticky bit-flip flag |
 | `tb/` | cocotb tests + golden vectors |
 | `synth/area.sh` | yosys → GF180 `gf180mcu_fd_sc_mcu7t5v0` cells, typical corner 5 V |
 | `scripts/eda.sh` | Run anything inside the EDA container |
@@ -48,8 +50,10 @@ make shell   # interactive shell in the EDA container
 
 | PE (GF180, synthesized) | Cells | Area |
 |---|---|---|
-| `mac_int8` | 916 | 19,026 µm² |
-| `pe_ternary` | 307 | 7,207 µm² (**2.6× smaller**) |
+| `mac_int8` (32-bit acc) | 900 | 18,762 µm² |
+| `pe_ternary` | 311 | 7,325 µm² (**2.6× smaller**) |
+| `pe_ws_ternary` (16-bit psum) | 154 | 4,395 µm² |
+| **`array_ternary` 16×16** | **37,970** | **1.26 mm²** (logic only, before place & route) |
 
 Takeaways:
 - **Memory dominates on GF180.** The biggest PDK SRAM macro is 512 bytes, about 0.21 mm². An int8 model this size
@@ -58,7 +62,7 @@ Takeaways:
   QAT recovers it fully.
 - **Ternary degrades least under bit flips:** -0.2 pts at 1% flip rate vs. -4 pts for int8. The free `11`
   error detection helps slightly, but at 5 trials that difference is within noise. More trials are needed before claiming it.
-- 16×16 array, logic only: int8 ≈ 4.9 mm², ternary ≈ 1.8 mm² (before routing overhead).
+- 16×16 ternary array synthesizes to 1.26 mm² of GF180 logic; 256 INT8 MACs alone would be ~4.8 mm².
 
 Caveats: MNIST + MLP is a stand-in. Swap in the real workload (e.g. satellite cloud/wildfire
 imagery) and a small CNN. The bit-flip model is uniform random flips in stored weights only.
@@ -73,6 +77,7 @@ imagery) and a small CNN. The bit-flip model is uniform random flips in stored w
 ## Next steps
 1. Pick the real workload + dataset; replace MNIST with a small CNN.
 2. More fault-injection trials and fault models (multi-bit upsets, activations/accumulators, not just weights).
-3. 16×16 ternary systolic array (`rtl/`) built from `pe_ternary`, with the same golden-vector flow.
+3. ~~16×16 ternary systolic array~~ done: computes real MNIST layer-1 outputs (49 tiles) bit-exact vs. Python.
+   Next: on-chip accumulator for K-tiling, weight/activation SRAM feeding it, INT8 array for comparison.
 4. SRAM wrapper around `gf180mcu_fd_ip_sram__sram512x8m8wm1` + error counter (doubles as a radiation monitor).
 5. LibreLane hardening of the PE/array for real post-route area and timing on GF180.

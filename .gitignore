@@ -7,3 +7,4 @@ __pycache__/
 results.xml
 *.vcd
 *.fst
+HANDOFF.md

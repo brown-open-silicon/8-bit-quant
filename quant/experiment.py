@@ -82,6 +82,28 @@ def export_vectors(m_int8, m_tern, x):
         print(f"  wrote {len(cases)} golden dot products -> tb/vectors/{name}.json")
 
 
+def export_array_vectors(m, x, n_img=8, N=16):
+    """Golden data for the NxN array: real layer-1 outputs for neurons 0..N-1.
+
+    Layer 1 is 784 inputs wide, so it's split into 784/16 = 49 K-tiles. The
+    array computes one tile at a time; the testbench sums the 49 partial
+    results and must match the full Python dot product exactly.
+    """
+    xq = qlib.quantize_activations(x[:n_img], m["sa1"])          # (n_img, 784)
+    q = m["q1"][:N]                                               # (N neurons, 784)
+    tiles = []
+    for k0 in range(0, q.shape[1], N):
+        w_tile = q[:, k0:k0 + N].T                                # W[k][n]
+        tiles.append({
+            "w": qlib.encode(w_tile, m["fmt"]).astype(int).tolist(),
+            "a": xq[:, k0:k0 + N].tolist(),
+        })
+    expected = (xq.astype(np.int64) @ q.T.astype(np.int64)).tolist()
+    out = {"N": N, "tiles": tiles, "expected": expected}
+    (VECTORS / "array_ternary.json").write_text(json.dumps(out))
+    print(f"  wrote {len(tiles)} weight tiles x {n_img} images -> tb/vectors/array_ternary.json")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--retrain", action="store_true")
@@ -138,6 +160,7 @@ def main():
 
     print("\nexporting golden vectors for RTL")
     export_vectors(models["int8"], models["ternary-qat"], x)
+    export_array_vectors(models["ternary-qat"], x)
 
 
 if __name__ == "__main__":
