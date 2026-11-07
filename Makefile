@@ -8,7 +8,7 @@ quant:        ## train MLP, compare int8/int4/ternary, fault-inject, export gold
 sim:          ## run cocotb RTL tests against golden vectors (in EDA container)
 	scripts/eda.sh python3 tb/run.py
 
-area:         ## synthesize PEs to GF180 standard cells, report area
+area:         ## synthesize blocks to Sky130 cells (PDK=gf180mcuD for GF180), report area
 	scripts/eda.sh synth/area.sh
 
 shell:        ## interactive shell in the EDA container, repo at /work

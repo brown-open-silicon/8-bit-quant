@@ -1,6 +1,6 @@
 # 8-bit-quant: BOS accelerator foundations
 
-Starting point for a **low-bit (ternary) AI accelerator on GF180** that is robust to
+Starting point for a **low-bit (ternary) AI accelerator on Sky130** (via ChipFoundry chipIgnite) that is robust to
 radiation-style bit flips. Everything here runs end to end in under a minute:
 
 ```
@@ -8,18 +8,18 @@ Python model ──quantize──▶ int8 / int4 / ternary ──fault-inject─
       │
       └──export golden vectors──▶ tb/vectors/*.json ──cocotb──▶ RTL must match bit-for-bit
                                                                   │
-                                                     yosys + GF180 cells ──▶ area
+                                                     yosys + Sky130 cells ──▶ area
 ```
 
 ## Quick start
 
 Needs `uv` (Python) and Docker with the `hpretl/iic-osic-tools:chipathon26` image
-(GF180 PDK, yosys, OpenROAD, LibreLane, magic, klayout, xschem, ngspice, iverilog, cocotb).
+(Sky130 + GF180 PDKs, yosys, OpenROAD, LibreLane, magic, klayout, xschem, ngspice, iverilog, cocotb).
 
 ```bash
 make quant   # train + quantize + fault-inject + export golden vectors   (~10 s)
 make sim     # RTL tests in the EDA container                            (~10 s)
-make area    # synthesize PEs to GF180 cells                             (~10 s)
+make area    # synthesize blocks to Sky130 cells (PDK=gf180mcuD for GF180) (~90 s)
 make shell   # interactive shell in the EDA container
 ```
 
@@ -37,7 +37,7 @@ make shell   # interactive shell in the EDA container
 | `rtl/accum_buf.sv` | int32 accumulator buffer: sums K-tiles (`first` = overwrite, else add), sticky overflow flag |
 | `rtl/core_ternary.sv` | Array + accumulator; `{first, addr}` tags ride a 31-cycle delay line with the data |
 | `tb/` | cocotb tests + golden vectors |
-| `synth/area.sh` | yosys → GF180 `gf180mcu_fd_sc_mcu7t5v0` cells, typical corner 5 V |
+| `synth/area.sh` | yosys → `sky130_fd_sc_hd` (tt 1.8 V) by default, or GF180 `gf180mcu_fd_sc_mcu7t5v0` with `PDK=gf180mcuD` |
 | `scripts/eda.sh` | Run anything inside the EDA container |
 | `third_party/coralnpu` | Google Coral NPU (submodule, Apache-2.0) |
 
@@ -50,25 +50,25 @@ make shell   # interactive shell in the EDA container
 | ternary (just rounded) | 24.8 KB | 50 (10.5 mm²) | 78.1% | 76.2% |
 | **ternary (QAT)** | **24.8 KB** | **50 (10.5 mm²)** | **96.7%** | **96.4%** |
 
-| PE (GF180, synthesized) | Cells | Area |
-|---|---|---|
-| `mac_int8` (32-bit acc) | 900 | 18,762 µm² |
-| `pe_ternary` | 311 | 7,325 µm² (**2.6× smaller**) |
-| `pe_ws_ternary` (16-bit psum) | 154 | 4,395 µm² |
-| **`array_ternary` 16×16** | **37,970** | **1.26 mm²** (logic only, before place & route) |
-| `accum_buf` (16 rows × 16 lanes × int32, flops) | 33,840 | 1.19 mm² |
-| **`core_ternary`** (array + accumulator) | **70,639** | **2.43 mm²** |
+| Block (synthesized, logic only, before place & route) | Sky130 cells | **Sky130 area** | GF180 area |
+|---|---|---|---|
+| `mac_int8` (32-bit acc) | 755 | 5,907 µm² | 18,762 µm² |
+| `pe_ternary` | 278 | 2,233 µm² (**2.6× smaller**) | 7,325 µm² |
+| `pe_ws_ternary` (16-bit psum) | 139 | 1,394 µm² | 4,395 µm² |
+| **`array_ternary` 16×16** | **36,580** | **0.41 mm²** | 1.26 mm² |
+| `accum_buf` (16 rows × 16 lanes × int32, flops) | 24,630 | 0.39 mm² | 1.19 mm² |
+| **`core_ternary`** (array + accumulator) | **58,880** | **0.79 mm²** | 2.43 mm² |
 
 The 8 Kb accumulator built from flip-flops is as big as the whole array. It should become SRAM.
 
 Takeaways:
-- **Memory dominates on GF180.** The biggest PDK SRAM macro is 512 bytes, about 0.21 mm². An int8 model this size
+- **Memory dominates.** On GF180 the biggest SRAM macro is 512 bytes, about 0.21 mm². An int8 model this size
   wouldn't fit on a small shuttle die. Ternary cuts that by 4×.
 - **Ternary needs quantization-aware training** (BitNet-style). Rounding a trained model loses about 19 points;
   QAT recovers it fully.
 - **Ternary degrades least under bit flips:** -0.2 pts at 1% flip rate vs. -4 pts for int8. The free `11`
   error detection helps slightly, but at 5 trials that difference is within noise. More trials are needed before claiming it.
-- 16×16 ternary array synthesizes to 1.26 mm² of GF180 logic; 256 INT8 MACs alone would be ~4.8 mm².
+- 16×16 ternary array synthesizes to 0.41 mm² on Sky130 (1.26 mm² on GF180); 256 INT8 MACs alone would be ~1.5 mm² on Sky130.
 
 Caveats: MNIST + MLP is a stand-in. Swap in the real workload (e.g. satellite cloud/wildfire
 imagery) and a small CNN. The bit-flip model is uniform random flips in stored weights only.
@@ -76,7 +76,7 @@ imagery) and a small CNN. The bit-flip model is uniform random flips in stored w
 ## Coral NPU notes
 - Chisel + SystemVerilog, built with **Bazel 8.6** (not installed; their CI uses `utils/coralnpu.dockerfile`, linux/amd64).
 - Matrix engine (VME) is **experimental** and supports **INT8 / FP32 / BF16 only**, with no int4 or ternary. That's an opening.
-- Their reference physical build is ~1.43M cells on ASAP7 (7 nm). The full core is far too big for GF180;
+- Their reference physical build is ~1.43M cells on ASAP7 (7 nm). The full core is far too big for a 10 mm² Sky130 slot;
   reuse pieces (scalar RISC-V core as controller, AXI interfaces) or treat it as a reference design.
 - Start with `third_party/coralnpu/doc/overview.md` and `doc/microarch/`.
 
@@ -87,4 +87,4 @@ imagery) and a small CNN. The bit-flip model is uniform random flips in stored w
    ~~On-chip accumulator~~ done: `core_ternary` sums all 49 K-tiles on chip, bit-exact.
    Next: move the accumulator to SRAM, weight/activation SRAM feeding the array, INT8 array for comparison.
 4. SRAM wrapper around `gf180mcu_fd_ip_sram__sram512x8m8wm1` + error counter (doubles as a radiation monitor).
-5. LibreLane hardening of the PE/array for real post-route area and timing on GF180.
+5. LibreLane hardening of the PE/array for real post-route area and timing on Sky130.

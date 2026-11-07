@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
-# Synthesize each PE to GF180 standard cells and report area.
-# Runs inside the EDA container:  scripts/eda.sh synth/area.sh
+# Synthesize blocks to standard cells and report area.
+# Runs inside the EDA container:
+#   scripts/eda.sh synth/area.sh                    # Sky130 (default)
+#   PDK=gf180mcuD scripts/eda.sh synth/area.sh      # GF180
+#   scripts/eda.sh synth/area.sh core_ternary       # one block
 set -euo pipefail
-LIB=$PDK_ROOT/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib
-mkdir -p build/synth
+case "${PDK:-sky130A}" in
+  sky130A)   LIB=$PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib ;;
+  gf180mcuD) LIB=$PDK_ROOT/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib ;;
+  *) echo "unknown PDK $PDK" >&2; exit 1 ;;
+esac
+OUT=build/synth/$PDK
+mkdir -p $OUT
+echo "PDK: $PDK"
 for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf core_ternary}; do
-  yosys -q -l build/synth/$top.log -p "
+  yosys -q -l $OUT/$top.log -p "
     read_verilog -sv rtl/*.sv
     synth -top $top -flatten
     dfflibmap -liberty $LIB
     abc -liberty $LIB
     opt_clean
-    tee -o build/synth/$top.stat stat -liberty $LIB" >/dev/null 2>build/synth/$top.warn
-  area=$(grep -i "chip area" build/synth/$top.stat | awk '{print $NF}')
-  cells=$(awk '/ cells$/{print $1; exit}' build/synth/$top.stat)
-  printf "%-12s %8s cells  %10s um^2\n" "$top" "$cells" "$area"
+    tee -o $OUT/$top.stat stat -liberty $LIB" >/dev/null 2>$OUT/$top.warn
+  area=$(grep -i "chip area" $OUT/$top.stat | awk '{print $NF}')
+  cells=$(awk '/ cells$/{print $1; exit}' $OUT/$top.stat)
+  printf "%-14s %8s cells  %14s um^2\n" "$top" "$cells" "$area"
 done
