@@ -22,7 +22,9 @@
 //   0x400  WMEM      RW      weight buffer: 256 rows (16 tiles x 16 rows), same
 //                            format as W_DATA. Stock Sky130 SRAM macro (1 KB,
 //                            sky130_sram_1kbyte_1rw1r_32x256_8): port 0 = bus,
-//                            port 1 = array. Bus reads of WMEM take 1 wait state.
+//                            port 1 = array.
+//
+// Every access takes 2 cycles (request registered first); WMEM reads take 3.
 //
 // Flow control (the bus waits instead of the CPU polling):
 //   - W_TILE waits until in-flight results have left the array (weights are
@@ -60,25 +62,39 @@ module wb_npu #(
     assign clk   = wb_clk_i;
     assign rst_n = ~wb_rst_i;
 
-    // ---- bus handshake: single-cycle ack (WMEM reads: one wait state)
-    logic       req, wr, mem_sel, stall, mem_pend;
+    // ---- bus handshake
+    // The request is captured in flops first (cycle 1) and decoded the next
+    // cycle (cycle 2), so the big address decode / read mux never sits on a
+    // path straight from the input pins. ack: cycle 2 (WMEM reads: cycle 3).
+    logic        act;                     // a captured request waits to execute
+    logic [31:0] adr_q, dat_q;
+    logic        we_q;
+    logic [3:0]  sel_q;
+    logic        req, wr, mem_sel, stall, mem_pend;
     logic [6:0] widx;                     // register word index, byte offset [8:2]
     logic       busy, loading;
     logic       in_valid;
-    assign mem_sel = wbs_adr_i[10];       // 0x400..0x7FF -> weight SRAM
-    assign widx    = wbs_adr_i[8:2];
-    assign stall   = wbs_we_i && !mem_sel &&
+    assign mem_sel = adr_q[10];       // 0x400..0x7FF -> weight SRAM
+    assign widx    = adr_q[8:2];
+    assign stall   = we_q && !mem_sel &&
                      ((widx == 7'h09 && loading) ||                        // PUSH
                       (widx == 7'h0C && (loading || busy || in_valid)));   // W_TILE
-    assign req  = wbs_stb_i && wbs_cyc_i && !wbs_ack_o && !mem_pend && !stall;
-    assign wr   = req && wbs_we_i && !mem_sel;
+    assign req  = act && !stall;          // execute the captured request now
+    assign wr   = req && we_q && !mem_sel;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wbs_ack_o <= 1'b0; mem_pend <= 1'b0;
+            wbs_ack_o <= 1'b0; mem_pend <= 1'b0; act <= 1'b0;
+            adr_q <= '0; dat_q <= '0; we_q <= 1'b0; sel_q <= '0;
         end else begin
-            mem_pend  <= req && mem_sel && !wbs_we_i;   // SRAM read: data next cycle
-            wbs_ack_o <= (req && !(mem_sel && !wbs_we_i)) || mem_pend;
+            if (wbs_stb_i && wbs_cyc_i && !act && !wbs_ack_o && !mem_pend) begin
+                act <= 1'b1;
+                adr_q <= wbs_adr_i; dat_q <= wbs_dat_i; we_q <= wbs_we_i; sel_q <= wbs_sel_i;
+            end else if (req) begin
+                act <= 1'b0;
+            end
+            mem_pend  <= req && mem_sel && !we_q;   // SRAM read: data next cycle
+            wbs_ack_o <= (req && !(mem_sel && !we_q)) || mem_pend;
         end
     end
 
@@ -97,8 +113,8 @@ module wb_npu #(
 `ifdef USE_POWER_PINS
         .vccd1 (vccd1), .vssd1 (vssd1),
 `endif
-        .clk0 (clk), .csb0 (!(req && mem_sel)), .web0 (!wbs_we_i), .wmask0 (wbs_sel_i),
-        .addr0 (wbs_adr_i[9:2]), .din0 (wbs_dat_i), .dout0 (mem_dout0),
+        .clk0 (clk), .csb0 (!(req && mem_sel)), .web0 (!we_q), .wmask0 (sel_q),
+        .addr0 (adr_q[9:2]), .din0 (dat_q), .dout0 (mem_dout0),
         .clk1 (clk), .csb1 (!ld_run), .addr1 ({ld_tile, ld_k}), .dout1 (mem_dout1)
     );
 
@@ -109,7 +125,7 @@ module wb_npu #(
             ld_v  <= ld_run;              // row requested now arrives next cycle
             ld_kd <= ld_k;
             if (wr && widx == 7'h0C) begin
-                ld_run <= 1'b1; ld_tile <= wbs_dat_i[3:0]; ld_k <= '0;
+                ld_run <= 1'b1; ld_tile <= dat_q[3:0]; ld_k <= '0;
             end else if (ld_run) begin
                 if (ld_k == 4'hF) ld_run <= 1'b0;
                 ld_k <= ld_k + 1'b1;
@@ -140,19 +156,19 @@ module wb_npu #(
             {w_load, in_valid, rd_en, err_clear} <= '0;
             if (wr) begin
                 case (widx)
-                    7'h02: err_clear <= wbs_dat_i[0];
-                    7'h03: w_data    <= wbs_dat_i;
-                    7'h04: begin w_load <= 1'b1; w_row <= wbs_dat_i[3:0]; end
+                    7'h02: err_clear <= dat_q[0];
+                    7'h03: w_data    <= dat_q;
+                    7'h04: begin w_load <= 1'b1; w_row <= dat_q[3:0]; end
                     7'h05, 7'h06, 7'h07, 7'h08:
-                           a_vec[32*(widx-7'h05) +: 32] <= wbs_dat_i;
-                    7'h09: begin in_valid <= 1'b1; in_addr <= wbs_dat_i[3:0];
-                                 in_first <= wbs_dat_i[4]; end
-                    7'h0A: pp_cfg    <= wbs_dat_i;
-                    7'h0B: begin rd_en <= 1'b1; rd_addr <= wbs_dat_i[3:0]; end
+                           a_vec[32*(widx-7'h05) +: 32] <= dat_q;
+                    7'h09: begin in_valid <= 1'b1; in_addr <= dat_q[3:0];
+                                 in_first <= dat_q[4]; end
+                    7'h0A: pp_cfg    <= dat_q;
+                    7'h0B: begin rd_en <= 1'b1; rd_addr <= dat_q[3:0]; end
                     default:
                         if (widx >= 7'h40 && widx < 7'h40 + 2 * N) begin
-                            if (!widx[0]) bias[B_W*((widx-7'h40)>>1) +: 32]      <= wbs_dat_i;
-                            else          bias[B_W*((widx-7'h40)>>1) + 32 +: 16] <= wbs_dat_i[15:0];
+                            if (!widx[0]) bias[B_W*((widx-7'h40)>>1) +: 32]      <= dat_q;
+                            else          bias[B_W*((widx-7'h40)>>1) + 32 +: 16] <= dat_q[15:0];
                         end
                 endcase
             end
@@ -196,7 +212,7 @@ module wb_npu #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) wbs_dat_o <= '0;
         else if (mem_pend) wbs_dat_o <= mem_dout0;
-        else if (req && !wbs_we_i && !mem_sel) begin
+        else if (req && !we_q && !mem_sel) begin
             wbs_dat_o <= '0;
             if      (widx == 7'h00) wbs_dat_o <= ID;
             // busy also covers a PUSH accepted this cycle that hasn't entered the pipe yet

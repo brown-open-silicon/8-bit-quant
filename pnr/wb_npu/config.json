@@ -22,8 +22,6 @@
   "RUN_IRDROP_REPORT": false,
   "GRT_ALLOW_CONGESTION": true,
   "QUIT_ON_SYNTH_CHECKS": false,
-  "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
-  "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
   "MACROS": {
     "sky130_sram_1kbyte_1rw1r_32x256_8": {
       "gds": [

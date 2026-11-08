@@ -86,7 +86,8 @@ module core_ternary #(
         end
     end
     logic pp_busy;
-    assign busy = |inflight | pp_busy;
+    logic acc_busy;
+    assign busy = |inflight | acc_busy | pp_busy;
 
     accum_buf #(.N(N), .IN_W(PSUM_W), .ACC_W(ACC_W), .DEPTH(DEPTH)) u_acc (
         .clk, .rst_n,
@@ -94,7 +95,7 @@ module core_ternary #(
         .in_first (tag_sr[LAT-1][AW]),
         .in_addr  (tag_sr[LAT-1][AW-1:0]),
         .in_vec   (arr_c),
-        .rd_en, .rd_addr, .rd_valid, .rd_vec,
+        .rd_en, .rd_addr, .rd_valid, .rd_vec, .busy (acc_busy),
         .ovf_clear(err_clear),
         .ovf
     );

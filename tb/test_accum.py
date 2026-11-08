@@ -25,7 +25,14 @@ async def write(dut, addr, vals, first):
     dut.in_valid.value = 0
 
 
+async def drain(dut):
+    """Wait until the 2-stage accumulate pipeline has written everything."""
+    while dut.busy.value:
+        await FallingEdge(dut.clk)
+
+
 async def read(dut, addr):
+    await drain(dut)
     dut.rd_en.value, dut.rd_addr.value = 1, addr
     await FallingEdge(dut.clk)
     dut.rd_en.value = 0
@@ -53,10 +60,48 @@ async def first_add_overflow(dut):
 
     await write(dut, 0, [30000, -30000, 0, 0], first=True)
     await write(dut, 0, [30000, 0, 0, 0], first=False)     # 60000 > 32767
+    await drain(dut)
     assert dut.ovf.value == 1, "positive overflow not flagged"
     dut.ovf_clear.value = 1
     await FallingEdge(dut.clk)
     dut.ovf_clear.value = 0
     assert dut.ovf.value == 0
     await write(dut, 0, [0, -30000, 0, 0], first=False)    # lane 1: -60000
+    await drain(dut)
     assert dut.ovf.value == 1, "negative overflow not flagged"
+
+
+@cocotb.test()
+async def random_back_to_back(dut):
+    """Random accumulates every cycle, often to the same row twice in a row
+    (exercises forwarding), checked against a Python model."""
+    import random
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    for sig in (dut.in_valid, dut.in_first, dut.in_addr, dut.in_vec, dut.rd_en,
+                dut.rd_addr, dut.ovf_clear):
+        sig.value = 0
+    dut.rst_n.value = 0
+    await RisingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    dut.rst_n.value = 1
+    rng = random.Random(3)
+    model = [[0] * N for _ in range(4)]
+    for addr in range(4):                                  # initialize every row
+        await write(dut, addr, [0] * N, first=True)
+    prev = 0
+    for _ in range(400):
+        addr = prev if rng.random() < 0.5 else rng.randrange(4)
+        first = rng.random() < 0.1
+        vals = [rng.randint(-50, 50) for _ in range(N)]
+        model[addr] = vals[:] if first else [a + v for a, v in zip(model[addr], vals)]
+        dut.in_valid.value, dut.in_addr.value = 1, addr
+        dut.in_first.value, dut.in_vec.value = int(first), pack(vals)
+        await FallingEdge(dut.clk)
+        prev = addr
+        if rng.random() < 0.2:                             # sometimes a gap
+            dut.in_valid.value = 0
+            await FallingEdge(dut.clk)
+    dut.in_valid.value = 0
+    for addr in range(4):
+        assert await read(dut, addr) == model[addr], f"row {addr}"
+    assert dut.ovf.value == 0
