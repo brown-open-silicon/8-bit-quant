@@ -7,8 +7,11 @@ pdk = os.environ["PDK_ROOT"] + "/sky130A"
 hd = pdk + "/libs.ref/sky130_fd_sc_hd"
 opt = pya.LoadLayoutOptions()
 cfg = opt.lefdef_config
-cfg.lef_files = [hd + "/techlef/sky130_fd_sc_hd__nom.tlef", hd + "/lef/sky130_fd_sc_hd.lef"]
-cfg.macro_layout_files = [hd + "/gds/sky130_fd_sc_hd.gds"]
+sram = pdk + "/libs.ref/sky130_sram_macros"
+SRAM = "sky130_sram_1kbyte_1rw1r_32x256_8"
+cfg.lef_files = [hd + "/techlef/sky130_fd_sc_hd__nom.tlef", hd + "/lef/sky130_fd_sc_hd.lef",
+                 f"{sram}/lef/{SRAM}.lef"]
+cfg.macro_layout_files = [hd + "/gds/sky130_fd_sc_hd.gds", f"{sram}/gds/{SRAM}.gds"]
 cfg.read_lef_with_def = False
 cfg.map_file = pdk + "/libs.tech/klayout/tech/sky130A.map"
 opt.lefdef_config = cfg

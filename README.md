@@ -110,6 +110,24 @@ CPU: compiled for the host, every register access becomes a real bus cycle on th
 
 `test_wb.sram_bitflip` flips a stored bit inside the SRAM (`01`→`11`) and checks the array flags it on load.
 
+## Physical design (LibreLane, Sky130)
+
+`pnr/wb_npu`: the whole bus-connected NPU **with the SRAM macro**, placed and routed to GDS
+(`klayout`/`render_def.py` + `floorplan_map.py` draw it).
+
+| | |
+|---|---|
+| Die | 1.77 × 1.78 mm (3.15 mm²; Caravel user area ≈ 10 mm²) |
+| Cells | 174k std cells + 1 SRAM macro (1 KB, 0.19 mm²) |
+| Timing @ 40 MHz, typical (tt 25 °C 1.8 V) | **met**: +5.1 ns setup, +0.22 ns hold |
+| Timing @ 40 MHz, slow (ss 100 °C 1.6 V) | **not met**: −9.5 ns (bus address → read mux), −5.4 ns (accumulator read-modify-write) |
+| Hold, all corners | met |
+| Power (typical, estimated) | ~0.10 W |
+| Open issues | 24 routing DRC, 294 antenna nets, slew/cap violations at the slow corner; DRC/LVS not run yet |
+
+Flow fixes that were needed: `CTS_APPLY_NDR: none` (wide clock wires could not reach clkbuf pins),
+SRAM black-box header with power pins (`rtl/macros/*_bb.v`), `STA_THREADS: 2` (9-corner STA ran out of 8 GB).
+
 ## Coral NPU notes
 - Chisel + SystemVerilog, built with **Bazel 8.6** (not installed; their CI uses `utils/coralnpu.dockerfile`, linux/amd64).
 - Matrix engine (VME) is **experimental** and supports **INT8 / FP32 / BF16 only**, with no int4 or ternary. That's an opening.
