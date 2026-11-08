@@ -9,3 +9,4 @@ results.xml
 *.fst
 HANDOFF.md
 pnr/*/runs/
+tb/libnpu_host.so
