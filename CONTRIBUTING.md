@@ -59,6 +59,7 @@ klayout pnr/wb_npu/runs/<run>/final/gds/wb_npu.gds     # layout (needs a finishe
 | come back | `docker start npu_vnc`, then open http://localhost:8080 |
 | start over (e.g. mounted the wrong folder) | `docker rm -f npu_vnc`, then the `docker run` above again |
 | check what is mounted | `docker inspect npu_vnc --format '{{range .Mounts}}{{.Source}}{{end}}'` |
+
 No layout run yet? See the pictures in [docs/architecture.md](docs/architecture.md#physical-design).
 
 ## 4. Pick a task
