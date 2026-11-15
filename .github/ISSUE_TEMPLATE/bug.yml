@@ -1,0 +1,34 @@
+name: Bug
+description: Something is broken or gives a wrong result
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and the output or error. Paste it as text, not a screenshot.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Your OS
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows (WSL2)
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Branch / commit
+      description: Output of `git log --oneline -1`

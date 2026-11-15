@@ -1,0 +1,52 @@
+name: Task
+description: Something to build, test, document, or investigate
+labels: []
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One or two sentences. What should exist when this is done?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - rtl (SystemVerilog design)
+        - verification (cocotb tests)
+        - layout (LibreLane, timing, DRC/LVS)
+        - ml (model, quantization, fault injection)
+        - firmware (C driver)
+        - sensor (PVT / radiation)
+        - sram (custom SRAM)
+        - integration (Caravel wrapper, precheck)
+        - documentation
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - Small (a few hours, good first issue)
+        - Medium (a few days)
+        - Large (a week or more)
+    validations:
+      required: true
+  - type: textarea
+    id: start
+    attributes:
+      label: Start here
+      description: Files or docs to read first.
+      placeholder: "e.g. rtl/wb_npu.sv, docs/architecture.md"
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      value: |
+        - [ ] 
+        - [ ] `make sim` passes
+    validations:
+      required: true

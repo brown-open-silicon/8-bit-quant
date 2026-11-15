@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: New here?
+    url: https://github.com/brown-open-silicon/8-bit-quant/blob/main/CONTRIBUTING.md
+    about: Setup, how to pick a task, and how to submit work.
