@@ -117,6 +117,7 @@ Then open a pull request. Rules:
 | `uv: command not found` right after installing | Close and reopen the terminal |
 | `make sim` dies with `Killed` or exit code 137 | Out of memory. Docker Desktop > Settings > Resources: 8 GB or more |
 | `no space left on device` | The image is 10+ GB. Free disk space, or `docker image prune` to drop old images |
+| `invoke the docker CLI from the docker-desktop WSL2 distribution` | You opened Docker's internal distro (prompt `docker-desktop:~#`). `exit`, then open **Ubuntu** from the Start menu (`wsl --install -d Ubuntu` if missing) and turn on its WSL integration in Docker Desktop |
 | `"$PWD" includes invalid characters for a local volume name` | You're in Command Prompt, or the quotes got pasted as curly `“ ”`. Use Ubuntu (WSL), or in cmd use `"%cd%"`, in PowerShell `"${PWD}"`. Retype the quotes by hand |
 | `Conflict. The container name "/npu_vnc" is already in use` | It already exists: `docker start npu_vnc`. To recreate it: `docker rm -f npu_vnc` |
 | `port is already allocated` | Something else uses 8080. Use `-p 8081:80` and open http://localhost:8081 |
