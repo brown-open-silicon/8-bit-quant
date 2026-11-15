@@ -92,6 +92,12 @@ accesses and 6,100 cycles per MNIST image. Most of that is activations, so a DMA
 
 ![Routed layout](img/layout_routed.jpg)
 
+Zoomed in on the real GDS in KLayout (`pnr/zoom_gds.py`):
+
+| Standard cells and wiring, about 40 x 25 um | SRAM edge: its pins and halo (left), logic (right) |
+|---|---|
+| ![cells](img/layout_zoom_cells.jpg) | ![sram edge](img/layout_zoom_sram_edge.jpg) |
+
 `pnr/wb_npu/config.json`, LibreLane on Sky130, 40 MHz target. Latest run: 1.79 x 1.81 mm, 180k cells,
 typical corner met, slow corner fails by 8.7 ns. The worst path runs from the latched bus address (`adr_q`) through
 the register decode to the 768 BIAS flip-flops. Registering the decoded write enables should fix it.

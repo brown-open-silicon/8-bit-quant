@@ -10,3 +10,4 @@ results.xml
 HANDOFF.md
 pnr/*/runs/
 tb/libnpu_host.so
+analog/*/sim/

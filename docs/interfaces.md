@@ -49,6 +49,12 @@ Rules:
 Purpose: measure process, voltage, temperature, and total-dose drift on the die, so firmware can tell
 whether a bad result came from the environment. It monitors conditions, not data.
 
+Starting point: [analog/ring_osc](../analog/ring_osc/README.md). It's a Sky130 ring oscillator with an xschem
+schematic and an ngspice PVT sweep. Its frequency moves about 14% with process and about 15% per 0.15 V, but only
+about 3% across -40 to 125 C.
+
+![Ring oscillator PVT sweep](img/ring_osc_pvt.png)
+
 Proposed registers (offsets from 0x3001_0000):
 
 | Offset | Name | R/W | Meaning |

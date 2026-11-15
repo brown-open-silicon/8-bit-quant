@@ -26,12 +26,18 @@ Done when `make sim` ends with every test `PASS`. If it doesn't, open an issue w
 
 ## 3. See the chip (30 min, optional)
 
+The GUI tools (KLayout, xschem) run in a desktop inside the container, viewed in your browser:
+
 ```bash
-make shell
-klayout pnr/wb_npu/runs/<run>/final/gds/wb_npu.gds   # needs a finished layout run
+docker run -d --name npu_vnc -p 8080:80 -v "$PWD":/foss/designs/8-bit-quant hpretl/iic-osic-tools:chipathon26
+# open http://localhost:8080  (password abc123), then in its terminal:
+cd /foss/designs/8-bit-quant && sak-pdk sky130A
+xschem analog/ring_osc/ring_osc.sch                    # schematic
+klayout pnr/wb_npu/runs/<run>/final/gds/wb_npu.gds     # layout (needs a finished layout run)
 ```
 
-No layout run yet? Look at [docs/img/layout_routed.jpg](docs/img/layout_routed.jpg).
+`docker stop npu_vnc` when done, `docker start npu_vnc` to come back.
+No layout run yet? See the pictures in [docs/architecture.md](docs/architecture.md#physical-design).
 
 ## 4. Pick a task
 

@@ -27,7 +27,7 @@ and is built to tolerate radiation-style bit flips. Brown Open Silicon.
 | Timing, 40 MHz slow corner (ss, 100 C, 1.6 V) | **fails** (-8.7 ns setup, small hold misses) |
 | Routing DRC / antenna | 16 / 0 |
 | DRC + LVS sign-off, Caravel wrapper, precheck | not started |
-| PVT sensor, custom SRAM (other teams) | in design, see [interfaces](docs/interfaces.md) |
+| PVT sensor, custom SRAM (other teams) | in design, see [interfaces](docs/interfaces.md); ring oscillator simulated ([analog/ring_osc](analog/ring_osc/README.md)) |
 
 ![Routed layout, colored by block](docs/img/layout_blocks.png)
 
@@ -67,5 +67,6 @@ Caveats: MNIST is a placeholder workload. The fault model is random flips in sto
 | `tb/` | cocotb tests, golden vectors, `npu_driver.py` (Python reference firmware) |
 | `firmware/` | C driver for Caravel's CPU |
 | `synth/`, `pnr/` | yosys area script; LibreLane configs and layout renderers |
+| `analog/ring_osc/` | xschem + ngspice ring oscillator, the PVT sensor starting point |
 | `scripts/eda.sh` | runs any command inside the EDA container |
 | `third_party/coralnpu` | Google Coral NPU, reference only (`make coral`) |
