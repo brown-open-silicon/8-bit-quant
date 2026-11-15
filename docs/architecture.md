@@ -41,6 +41,10 @@ Up to 16 images (the batch) go through each tile while its weights are loaded.
 
 Weight encoding (2 bits): `00` = 0, `01` = +1, `10` = -1, `11` = invalid (bit-flip detected).
 
+## Memory map
+
+![Memory map](img/memory_map.png)
+
 ## Register map (`wb_npu`, byte offsets from 0x3000_0000)
 
 | Offset | Name | R/W | Meaning |
