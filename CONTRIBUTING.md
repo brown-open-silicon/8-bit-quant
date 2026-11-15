@@ -22,21 +22,43 @@ make quant                                        # Python: train + quantize (~1
 make sim                                          # RTL tests (a few minutes)
 ```
 
-Done when `make sim` ends with every test `PASS`. If it doesn't, open an issue with the output.
+Done when `make sim` ends with every test `PASS`. If it doesn't, see [Troubleshooting](#troubleshooting), then open an issue with the output.
+
+**Windows:** do everything inside WSL2 (Ubuntu), never PowerShell or `C:\`.
+
+1. In PowerShell (admin): `wsl --install`, reboot, open "Ubuntu".
+2. Docker Desktop: Settings > General > "Use the WSL 2 based engine", and Settings > Resources > WSL integration > turn on Ubuntu.
+3. In Ubuntu: `sudo apt update && sudo apt install -y git make curl`, then the commands above.
+4. Clone into your Linux home (`cd ~`), not `/mnt/c/...`. Clones on the Windows side are slow and break the scripts (line endings).
+5. Edit with VS Code: run `code .` from Ubuntu inside the repo. Windows Explorer can see the files at `\\wsl$\Ubuntu\home\<you>`.
 
 ## 3. See the chip (30 min, optional)
 
-The GUI tools (KLayout, xschem) run in a desktop inside the container, viewed in your browser:
+The GUI tools (KLayout, xschem) run in a desktop inside the container, viewed in your browser.
+Your repo folder is **mounted** into it: the same files, not a copy. Edits on either side show up on the other.
+
+First time only. Run it **from the repo folder** (macOS, Linux, WSL):
 
 ```bash
 docker run -d --name npu_vnc -p 8080:80 -v "$PWD":/foss/designs/8-bit-quant hpretl/iic-osic-tools:chipathon26
-# open http://localhost:8080  (password abc123), then in its terminal:
-cd /foss/designs/8-bit-quant && sak-pdk sky130A
+```
+
+PowerShell, only if you can't use WSL: replace `"$PWD"` with `"${PWD}"`.
+
+Then open http://localhost:8080 (password `abc123`) and in its terminal:
+
+```bash
+cd /foss/designs/8-bit-quant && sak-pdk sky130A        # sak-pdk every new terminal, or symbols go missing
 xschem analog/ring_osc/ring_osc.sch                    # schematic
 klayout pnr/wb_npu/runs/<run>/final/gds/wb_npu.gds     # layout (needs a finished layout run)
 ```
 
-`docker stop npu_vnc` when done, `docker start npu_vnc` to come back.
+| Later | Command |
+|---|---|
+| stop when done | `docker stop npu_vnc` |
+| come back | `docker start npu_vnc`, then open http://localhost:8080 |
+| start over (e.g. mounted the wrong folder) | `docker rm -f npu_vnc`, then the `docker run` above again |
+| check what is mounted | `docker inspect npu_vnc --format '{{range .Mounts}}{{.Source}}{{end}}'` |
 No layout run yet? See the pictures in [docs/architecture.md](docs/architecture.md#physical-design).
 
 ## 4. Pick a task
@@ -82,6 +104,26 @@ Then open a pull request. Rules:
 | `scripts/eda.sh "python3 tb/run.py wb_npu"` | run one test group (names in `tb/run.py`) |
 | `PDK=gf180mcuD make area` | synthesize for GF180 instead of Sky130 |
 | `scripts/eda.sh 'librelane --manual-pdk --pdk-root $PDK_ROOT --pdk sky130A --run-tag mine pnr/wb_npu/config.json'` | full place and route (~1-2 h, 8+ GB RAM) |
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Cannot connect to the Docker daemon` | Docker Desktop isn't running. Start it and wait for "Engine running". On WSL, also turn on WSL integration (above) |
+| `permission denied ... docker.sock` (Linux) | `sudo usermod -aG docker $USER`, then log out and back in |
+| `$'\r': command not found` or `bad interpreter` | Windows line endings. Run `git config --global core.autocrlf input`, delete the repo, and clone it again inside WSL |
+| `make: command not found` | macOS: `xcode-select --install`. WSL/Linux: `sudo apt install -y make` |
+| `uv: command not found` right after installing | Close and reopen the terminal |
+| `make sim` dies with `Killed` or exit code 137 | Out of memory. Docker Desktop > Settings > Resources: 8 GB or more |
+| `no space left on device` | The image is 10+ GB. Free disk space, or `docker image prune` to drop old images |
+| `Conflict. The container name "/npu_vnc" is already in use` | It already exists: `docker start npu_vnc`. To recreate it: `docker rm -f npu_vnc` |
+| `port is already allocated` | Something else uses 8080. Use `-p 8081:80` and open http://localhost:8081 |
+| Browser shows a blank or black page | Wait 20 s and refresh. Still blank: `docker logs npu_vnc` |
+| `/foss/designs/8-bit-quant` is empty in the VNC | You ran `docker run` outside the repo folder. Start over (`docker rm -f npu_vnc`) from the repo folder |
+| xschem shows missing symbols (red boxes) | Run `sak-pdk sky130A` in that terminal, then reopen xschem |
+| Very slow on Windows | The repo is under `/mnt/c/`. Clone it into `~` inside WSL instead |
+
+Still stuck? Open an issue with the Bug template and paste the full command and output.
 
 ## Where to ask
 
