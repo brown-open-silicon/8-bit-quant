@@ -114,6 +114,7 @@ Then open a pull request. Rules:
 | `permission denied ... docker.sock` (Linux) | `sudo usermod -aG docker $USER`, then log out and back in |
 | `$'\r': command not found` or `bad interpreter` | Windows line endings. Run `git config --global core.autocrlf input`, delete the repo, and clone it again inside WSL |
 | `make: command not found` | macOS: `xcode-select --install`. WSL/Linux: `sudo apt install -y make` |
+| `make` not recognized (Windows PowerShell) | Run the tests inside the VNC terminal instead: `cd /foss/designs/8-bit-quant && python3 tb/run.py` (same tests as `make sim`) |
 | `uv: command not found` right after installing | Close and reopen the terminal |
 | `make sim` dies with `Killed` or exit code 137 | Out of memory. Docker Desktop > Settings > Resources: 8 GB or more |
 | `no space left on device` | The image is 10+ GB. Free disk space, or `docker image prune` to drop old images |
