@@ -10,7 +10,8 @@ and is built to tolerate radiation-style bit flips. Brown Open Silicon.
 
 | Doc | What |
 |---|---|
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, first task, how to submit work |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | First task, how to submit work |
+| [docs/setup.md](docs/setup.md) | Install (macOS, Windows, Linux), VNC, tests, troubleshooting |
 | [docs/architecture.md](docs/architecture.md) | How the chip works, block by block, plus the register map |
 | [docs/interfaces.md](docs/interfaces.md) | Specs for the blocks other teams plug in (PVT sensor, SRAM, Caravel) |
 | [docs/glossary.md](docs/glossary.md) | PE, MAC, systolic, PDK, DRC... in plain words |
