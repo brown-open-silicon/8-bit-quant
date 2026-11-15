@@ -70,3 +70,7 @@ TLDR: the words you will hear, in one line each. Sorted by topic.
 | Icarus | the Verilog simulator our tests use |
 | LibreLane | the open-source flow that takes RTL to GDS |
 | KLayout | layout viewer |
+
+
+### Other
+Sweep - Many simulations runing

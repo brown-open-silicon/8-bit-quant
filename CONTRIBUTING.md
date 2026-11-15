@@ -86,3 +86,7 @@ Then open a pull request. Rules:
 ## Where to ask
 
 Ask in the team chat, or open an issue with the `question` label. No question is too basic.
+
+## Other
+
+Make a new folder when it's a new kind of thing. If something already exists for it then work on that folder.
