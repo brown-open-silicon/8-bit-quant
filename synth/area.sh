@@ -13,7 +13,7 @@ esac
 OUT=build/synth/$PDK
 mkdir -p $OUT
 echo "PDK: $PDK"
-for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf postproc core_ternary}; do
+for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf postproc core_ternary tmr_reg}; do
   yosys -q -l $OUT/$top.log -p "
     read_verilog -sv rtl/*.sv
     synth -top $top -flatten
@@ -21,7 +21,11 @@ for top in ${@:-mac_int8 pe_ternary pe_ws_ternary array_ternary accum_buf postpr
     abc -liberty $LIB
     opt_clean
     tee -o $OUT/$top.stat stat -liberty $LIB" >/dev/null 2>$OUT/$top.warn
-  area=$(grep -i "chip area" $OUT/$top.stat | awk '{print $NF}')
-  cells=$(awk '/ cells$/{print $1; exit}' $OUT/$top.stat)
+  # With kept submodules (keep_hierarchy), stat lists each module, then a
+  # "design hierarchy" total. Report the total: last "cells" line, and the
+  # "top module" area line if present.
+  area=$(grep -i "chip area for top module" $OUT/$top.stat || grep -i "chip area" $OUT/$top.stat)
+  area=$(echo "$area" | tail -1 | awk '{print $NF}')
+  cells=$(awk '/ cells$/{c=$1} END{print c}' $OUT/$top.stat)
   printf "%-14s %8s cells  %14s um^2\n" "$top" "$cells" "$area"
 done
