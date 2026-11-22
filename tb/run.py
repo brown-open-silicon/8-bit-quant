@@ -14,6 +14,7 @@ RTL = ROOT / "rtl"
 # name -> (rtl sources, cocotb test module[, top, parameters])
 TESTS = {
     "mac_int8":      (["mac_int8.sv"], "test_pe"),
+    "tmr_reg": (["tmr_reg.sv"], "test_tmr"),
     "pe_ternary":    (["pe_ternary.sv"], "test_pe"),
     "array_ternary": (["pe_ws_ternary.sv", "array_ternary.sv"], "test_array"),
     "core_ternary":  (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
