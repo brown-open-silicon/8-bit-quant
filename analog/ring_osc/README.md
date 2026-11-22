@@ -1,13 +1,16 @@
 # Ring oscillator (PVT sensor starting point)
 
-TLDR: 7 inverters in a loop oscillate at about 1.6 GHz on Sky130. The frequency shifts with process, voltage,
-and temperature, which is what a PVT sensor measures. Starting point for the sensor team.
+TLDR: 7 inverters in a loop oscillate at about 1.6 GHz. The frequency shifts with process, voltage,
+and temperature (PVT). Buffer for PVT team (Luc/Emily).
 
 ![Schematic (xschem)](../../docs/img/ring_osc_sch.png)
 
 ```bash
-scripts/eda.sh "python3 analog/ring_osc/sweep.py"   # xschem netlist -> ngspice PVT sweep -> plots (~1 min)
+scripts/eda.sh "python3 analog/ring_osc/sweep.py"
 ```
+- ~1 min to run 
+- xschem -> netlist -> ngspice PVT sweep
+- remakes the graphs + waveform
 
 To edit it, open `ring_osc.sch` in xschem (VNC desktop, see [CONTRIBUTING](../../CONTRIBUTING.md)).
 
