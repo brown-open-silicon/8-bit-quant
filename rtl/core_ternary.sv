@@ -15,7 +15,7 @@
 //       stream M vectors, addr=i, first=(t==0)
 //       wait for the pipeline to drain before the next weight load
 //   read rows 0..M-1: rd_vec (raw int32) after 1 cycle,
-//   q_vec / wide_vec (requantized) when pp_valid pulses (N+2 cycles with the
+//   q_vec / wide_vec (requantized) when pp_valid pulses (N+3 cycles with the
 //   default 1-lane postproc); wait for pp_valid before the next rd_en
 //
 // Do not load weights while results are still in flight: the PEs would use
