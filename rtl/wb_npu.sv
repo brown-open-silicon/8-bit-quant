@@ -63,14 +63,13 @@ module wb_npu #(
     assign rst_n = ~wb_rst_i;
 
     // ---- bus handshake
-    // The request is captured in flops first (cycle 1) and decoded the next
-    // cycle (cycle 2), so the big address decode / read mux never sits on a
-    // path straight from the input pins. ack: cycle 2 (WMEM reads: cycle 3).
+    // The request is captured in flops first (cycle 1) and decoded the next cycle (cycle 2), so the big address decode / read mux no big logic between the pins and the first flip flop. ack: cycle 2 (WMEM reads: cycle 3).
+    // Input pins: wbs_adr_i/wbs_dat_i. The wires coming into wb_npu from the outside (the cpu through Careval's wiring). The issue is that those signals show up already late (issue #6). 
     logic        act;                     // a captured request waits to execute
     logic [31:0] adr_q, dat_q;
     logic        we_q;
     logic [3:0]  sel_q;
-    logic        req, wr, mem_sel, stall, mem_pend;
+    logic        req, wr, mem_sel, stall, mem_pend, bias_pend; // mem_pend = a WMEM read is waiting for the SRAM to answer
     logic [6:0] widx;                     // register word index, byte offset [8:2]
     logic       busy, loading;
     logic       in_valid;
@@ -81,20 +80,25 @@ module wb_npu #(
                       (widx == 7'h0C && (loading || busy || in_valid)));   // W_TILE
     assign req  = act && !stall;          // execute the captured request now
     assign wr   = req && we_q && !mem_sel;
+    // Issue #6: a BIAS write (widx 0x40..0x5F). Just a range check, cheap.
+    logic bias_wr;
+    assign bias_wr = wr && widx >= 7'h40 && widx < 7'h40 + 2 * N;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wbs_ack_o <= 1'b0; mem_pend <= 1'b0; act <= 1'b0;
             adr_q <= '0; dat_q <= '0; we_q <= 1'b0; sel_q <= '0;
         end else begin
-            if (wbs_stb_i && wbs_cyc_i && !act && !wbs_ack_o && !mem_pend) begin
+            if (wbs_stb_i && wbs_cyc_i && !act && !wbs_ack_o && !mem_pend && !bias_pend) begin
+                // Issue #6: !bias_pend added so that we bloc capture of a second BIAS write
                 act <= 1'b1;
                 adr_q <= wbs_adr_i; dat_q <= wbs_dat_i; we_q <= wbs_we_i; sel_q <= wbs_sel_i;
             end else if (req) begin
                 act <= 1'b0;
             end
             mem_pend  <= req && mem_sel && !we_q;   // SRAM read: data next cycle
-            wbs_ack_o <= (req && !(mem_sel && !we_q)) || mem_pend;
+            // Issue #6: BIAS writes don't ack in cycle 2; they ack in cycle 3 (bias_pend)
+            wbs_ack_o <= (req && !(mem_sel && !we_q) && !bias_wr) || mem_pend || bias_pend;
         end
     end
 
@@ -118,6 +122,12 @@ module wb_npu #(
         .clk1 (clk), .csb1 (!ld_run), .addr1 ({ld_tile, ld_k}), .dout1 (mem_dout1)
     );
 
+    // convery belt. When CPU writes W_TILE = t, this block streams 16 weight rows from the SRAM into the array. one row per cycle w/0 the CPU doing 16 seperate writes.
+    // ld_run: the belt is moving
+    // ld_tile: which tile (t)
+    // ld_k: which row (counts 0 -> 15 (then stops))
+    // ld_v: "a row arrives this cycle". It's ld_run delayed by 1, b/c SRAM takes a cycle to answer
+    // ld_kd: ld_k dalyed by 1 so the row number matches the data arriving
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             ld_run <= 1'b0; ld_v <= 1'b0; ld_tile <= '0; ld_k <= '0; ld_kd <= '0;
@@ -133,25 +143,31 @@ module wb_npu #(
         end
     end
 
-    // ---- registers
-    logic [31:0]        w_data;
-    logic [8*N-1:0]     a_vec;
-    logic [31:0]        pp_cfg;
-    logic [B_W*N-1:0]   bias;
-    logic [8*N-1:0]     q_res;
-    logic [32*N-1:0]    wide_res;
-    logic               res_ready;
+    // front desk registers
+    logic [31:0]        w_data; // one weight row, waiting to be loaded
+    logic [8*N-1:0]     a_vec; // 16 int 8 inputs
+    logic [31:0]        pp_cfg; // scale (m, shift) + relu
+    logic [B_W*N-1:0]   bias; // bias setting
+    logic [8*N-1:0]     q_res; // result waiting to be read
+    logic [32*N-1:0]    wide_res; // result waiting to be read
+    logic               res_ready; // result waiting to be read
 
     // one-cycle command pulses
     logic               w_load, rd_en, err_clear;
     logic [3:0]         w_row, in_addr, rd_addr;
     logic               in_first;
 
+    // Issue #6: BIAS write saved in cycle 2, done in cycle 3
+    localparam int LW = $clog2(N);
+    logic [LW-1:0]      bias_lane; // which lane (0..15) = widx[4:1] for 0x40..0x5F
+    logic               bias_hi;   // which half: 0 = bits [31:0], 1 = bits [47:32]
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             w_data <= '0; a_vec <= '0; pp_cfg <= '0; bias <= '0;
             {w_load, in_valid, rd_en, err_clear} <= '0;
             {w_row, in_addr, rd_addr, in_first} <= '0;
+            bias_pend <= 1'b0; bias_lane <= '0; bias_hi <= 1'b0;
         end else begin
             {w_load, in_valid, rd_en, err_clear} <= '0;
             if (wr) begin
@@ -165,20 +181,29 @@ module wb_npu #(
                                  in_first <= dat_q[4]; end
                     7'h0A: pp_cfg    <= dat_q;
                     7'h0B: begin rd_en <= 1'b1; rd_addr <= dat_q[3:0]; end
-                    default:
-                        if (widx >= 7'h40 && widx < 7'h40 + 2 * N) begin
-                            if (!widx[0]) bias[B_W*((widx-7'h40)>>1) +: 32]      <= dat_q;
-                            else          bias[B_W*((widx-7'h40)>>1) + 32 +: 16] <= dat_q[15:0];
-                        end
+                    default: ;
                 endcase
+            end
+            // cycle 2: just save lane + half into flops (no 768-FF steering yet)
+            if (bias_wr) begin
+                bias_pend <= 1'b1;
+                bias_lane <= widx[LW:1];
+                bias_hi   <= widx[0];
+            end
+            // cycle 3: write from the saved flops. dat_q is still valid because
+            // capture is blocked while bias_pend is set.
+            if (bias_pend) begin
+                if (!bias_hi) bias[B_W*bias_lane +: 32]      <= dat_q;
+                else          bias[B_W*bias_lane + 32 +: 16] <= dat_q[15:0];
+                bias_pend <= 1'b0;
             end
         end
     end
 
     // ---- the compute core (weight rows come from W_LOAD or from a W_TILE burst)
     logic err, ovf, pp_valid;
-    logic [32*N-1:0] wide_vec, rd_vec_unused;
-    logic [8*N-1:0]  q_vec;
+    logic [32*N-1:0] wide_vec, rd_vec_unused; // wide_vec, 16xint32, the full precision answers
+    logic [8*N-1:0]  q_vec; // 16 x int8, the final small answers after the shift, ReLU & Saturates. These are what the next layer uses
     logic            rd_valid_unused;
 
     core_ternary #(.N(N), .DEPTH(16), .B_W(B_W)) u_core (
@@ -197,6 +222,7 @@ module wb_npu #(
     assign irq = err | ovf;
 
     // results are latched so the CPU can read them at its own pace
+    // copy wide_vec and q_vec into q_res/wide_res when pp_valid. Copy them because the cpu is slow. It reads them over the bus later, one word at a time
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             q_res <= '0; wide_res <= '0; res_ready <= 1'b0;
@@ -229,3 +255,47 @@ module wb_npu #(
         end
     end
 endmodule
+
+// Issue #6
+// - To fix the slow corner sweep, we are going to make the bus check if it is going to do a BIAS write. Since BIAS writes are rare, it won't have to check that often. IN a worst case scenario, it will be ~80 microseconds and ~0.7 microseconds min. It's dependent on layers that the neural net has. The math is: 
+// layer 1: 128 biases | 128 * 2 (2 writes because it is bigger than word) = 256
+// layer 2: 10 biasess | 1 group of 16 lanes = 32 (some unused)
+// total is 288 extra cycles = ~7 microseconds
+// Mechanism vvvv
+// cycle 1 | capture (adr_q, dat_q)
+// cycle 2 | decode + save lane/half into flops + set bias_pend (NO ack)
+// cycle 3 | write BIAS from those flip-flops + ack, clear bias_pend
+// It's cheap to see if we have BIAS addresses (widx 0x40-0x5F). The expensive part was steering the data into one of 16 lanes across 768 flip-flops. Cycle 3 does that starting from flip-flops that already hold the answer 
+//bus pins → capture FFs (cycle 1) → decoder → NEW pending FFs (cycle 2) → 768 BIAS FFs (cycle 3)
+
+
+// Notes vvv
+// - Word: just 32 bits. the width of the bus. like how a byte is 8 bits
+// - In a neural net, it is y = (W*x + B) * scale. BIAS is + B. The hardware works out to y = (acc*m + B) >> shift
+// - If you wanted to use ReLu and shift example for PP_CFG: 0x010C_0029. where relu is bit 24, shift is bits 21:16, and m is 15/0. (e.g., scaling by 0.01 where m = 41 and shift is 12 because 41 / (2^12))
+// - Every bus access takes about 2 cycles
+// --> cycle 1 = capture: save CPU's requests into flip-flops: adr_q, dat_q, we_q
+// --> cycle 2 = execute: decode widx, write the register (or read it out), send ack
+// --> WMEM takes ~3 cycles
+// - WMEME holds 16 tiles (1 KB) of weights on chip at once. Bigger models mean that the CPU reloads it between chunks
+// - Accumulator holds 16 rows, so up to 16 images (or rows) per batch
+// - Whole model has to fit in Caravel's CPU 
+
+// Questions
+// - Does the CPU read each response from the systolic array one word at a time? so instead of how the systolic array operates where it's row to row like in a convery belt, the CPU just reads one at a tie
+// - Answer: Yes. The bus is 32 bits wide. 
+// - Does PE stand for Processing _something_? Does it mean one unit that goes through a computation?
+// - Answer: Processing Element. Holds one terenary weight (-1, 0, or +1)
+// - Does the systolic array have 1 row active while the other ones are idle until they are used? or is there like a chain of information alaways passing through with space in between them?
+// - Answer: Inputs move sideways and partial sums move down. Inputs enter staggered (skewed) so the work spreads as a diagonal wave. At the start, only the corner PE is busy and the wave spreads until all 256 PE's are busy. Every PE works every tick
+// Q (issue #6): 
+// - Where did the 25ns come from initially? It is set in config.json. Which is 40 MHz. We don't pick our own clock, we run off of Caravel's CPU and bus. 25ns is the default for Careval projects.
+// - Are BIAS per PE or per what? BIAS is per lane which means per output. The array has 16 columns and each column produces on answer, so 16 answers come out at a time.  In neural-net terms, each answer is one output neuron and ach neuron has it's own bias. It is 16 in total
+// - Why 16 lanes x 2 words for BIAS? Each BIAS is 48 bits but each and a word is 32 bits wide. so it needs to get split up to fit 
+// - what are the max/min amount of layers for this NPU? There is no limit because the firmware (the CPU) loops over layers. Inside each layer, it loves over 16x16 tiles. 
+// - Can we make each BIAS be a smaller amount of bits and would this improve the entire NPU overal?
+// - What does a BIAS value look like for this? An example bias could be pos/neg 400,212 something like that. It is stored pre-scaled by 2^sh. The chips add the bias to acc x m before the shift. 
+// Why does layer 1 have so many biases? 
+// How many layers can a typical model have? 2-5 are tiny, 15-30 are small, and 12-100 blocks are for transformers
+// Is a tile just another name for a pixel in CNN?
+// Why do we need to give hardware ACK?

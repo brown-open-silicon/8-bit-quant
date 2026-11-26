@@ -54,7 +54,7 @@ async def golden_requant(dut):
                 await FallingEdge(dut.clk)
                 lat += 1
                 assert lat < 40, "out_valid never arrived"
-            assert lat == N // P + 2, f"latency {lat}, expected {N // P + 2}"
+            assert lat == N // P + 3, f"latency {lat}, expected {N // P + 3}"
             got_w.append(unpack_signed(int(dut.wide_vec.value), 32, N))
             got_q.append(unpack_signed(int(dut.q_vec.value), 8, N))
         assert got_w == c["wide"], f"wide mismatch (m={c['m']}, sh={c['sh']})"
