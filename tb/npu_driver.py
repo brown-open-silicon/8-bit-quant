@@ -19,14 +19,15 @@ def _s(v, bits):
 
 
 class Npu:
-    def __init__(self, dut):
+    def __init__(self, dut, base=0):
         self.dut = dut
+        self.base = base                  # 0x3000_0000 when driven through user_project_wrapper
         self.n_access = 0
 
     # ---------------------------------------------------------- bus primitives
     async def _cycle(self, addr, we, data=0):
         d = self.dut
-        d.wbs_adr_i.value = addr
+        d.wbs_adr_i.value = self.base + addr
         d.wbs_we_i.value = int(we)
         d.wbs_dat_i.value = data & 0xFFFFFFFF
         d.wbs_sel_i.value = 0xF
@@ -47,7 +48,7 @@ class Npu:
     async def _cycle_sel(self, addr, data, sel):
         """Write with a byte mask (wbs_sel_i)."""
         d = self.dut
-        d.wbs_adr_i.value, d.wbs_we_i.value, d.wbs_dat_i.value = addr, 1, data
+        d.wbs_adr_i.value, d.wbs_we_i.value, d.wbs_dat_i.value = self.base + addr, 1, data
         d.wbs_sel_i.value, d.wbs_stb_i.value, d.wbs_cyc_i.value = sel, 1, 1
         while True:
             await FallingEdge(d.wb_clk_i)
