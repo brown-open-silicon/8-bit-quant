@@ -9,6 +9,7 @@
 //   0x004  STATUS    R       [0] busy  [1] err (any bit flip seen)  [2] ovf  [3] result ready
 //                            [4] weight flip (code 11)  [5] PP_CFG copy flip (TMR, repaired)
 //                            [6] BIAS parity error (reload BIAS)  [7] WMEM parity error (re-send tile)
+//                            [8] row-tag copy flip (TMR, repaired)
 //   0x008  CTRL      W       [0] clear err/ovf (a BIAS parity error stays until BIAS is rewritten)
 //   0x00C  W_DATA    RW      one weight row: 16 x 2-bit codes, lane n = bits [2n+1:2n]
 //   0x010  W_LOAD    W       write k -> load W_DATA into array row k
@@ -274,12 +275,14 @@ module wb_npu #(
         end
     endgenerate
 
-    logic cfg_err, bias_err, wmem_err;    // sticky, cleared by CTRL[0]
+    logic tag_tmr_err;
+    logic cfg_err, bias_err, wmem_err, tag_err;    // sticky, cleared by CTRL[0]
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            cfg_err <= 1'b0; bias_err <= 1'b0; wmem_err <= 1'b0;
+            cfg_err <= 1'b0; bias_err <= 1'b0; wmem_err <= 1'b0; tag_err <= 1'b0;
         end else begin
             wmem_err <= wmem_bad | (wmem_err & !err_clear);
+            tag_err  <= tag_tmr_err | (tag_err & !err_clear);
             cfg_err  <= cfg_tmr_err | (cfg_err  & !err_clear);
             bias_err <= (|bias_bad) | (bias_err & !err_clear);
         end
@@ -287,7 +290,7 @@ module wb_npu #(
 
     // ---- the compute core (weight rows come from W_LOAD or from a W_TILE burst)
     logic w_err, err, ovf, pp_valid;
-    assign err = w_err | cfg_err | bias_err | wmem_err;
+    assign err = w_err | cfg_err | bias_err | wmem_err | tag_err;
     logic [32*N-1:0] wide_vec, rd_vec_unused; // wide_vec, 16xint32, the full precision answers
     logic [8*N-1:0]  q_vec; // 16 x int8, the final small answers after the shift, ReLU & Saturates. These are what the next layer uses
     logic            rd_valid_unused;
@@ -303,7 +306,7 @@ module wb_npu #(
         .pp_m (pp_cfg[15:0]), .pp_sh (pp_cfg[21:16]), .pp_relu (pp_cfg[24]),
         .pp_bias (bias),
         .pp_valid, .wide_vec, .q_vec,
-        .err_clear, .err (w_err), .ovf
+        .err_clear, .err (w_err), .ovf, .tag_err (tag_tmr_err)
     );
     assign irq = err | ovf;
 
@@ -345,7 +348,7 @@ module wb_npu #(
             case (widx[4:0])
                 5'h00: rd_misc <= ID;
                 // busy also covers a PUSH accepted this cycle that hasn't entered the pipe yet
-                5'h01: rd_misc <= {24'b0, wmem_err, bias_err, cfg_err, w_err, res_ready, ovf, err, busy | in_valid | loading};
+                5'h01: rd_misc <= {23'b0, tag_err, wmem_err, bias_err, cfg_err, w_err, res_ready, ovf, err, busy | in_valid | loading};
                 5'h03: rd_misc <= w_data;
                 5'h05: rd_misc <= a_vec[31:0];
                 5'h06: rd_misc <= a_vec[63:32];

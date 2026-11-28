@@ -5,8 +5,8 @@
     "dir::../../rtl/array_ternary.sv",
     "dir::../../rtl/accum_buf.sv",
     "dir::../../rtl/postproc.sv",
-    "dir::../../rtl/core_ternary.sv",
     "dir::../../rtl/tmr_reg.sv",
+    "dir::../../rtl/core_ternary.sv",
     "dir::../../rtl/wb_npu.sv"
   ],
   "USE_SYNLIG": false,

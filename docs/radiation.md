@@ -23,7 +23,7 @@ which is how long a flip can do damage.
 |---|---|---|---|---|---|---|---|
 | Weight SRAM (WMEM) | 8,192 | whole layer, or longer | one weight wrong for every image until reload. A flip into code `11` is caught (2 of the 6 possible single flips) | **high** (silent, long-lived) | parity per SRAM byte (per byte so masked writes work), checked on bus read and tile stream, sticky `STATUS[7]`. Firmware re-sends the tile | **done** | 1,024 FFs + XOR trees, about 0.06 mm^2 |
 | PE weight registers | 512 | one K-tile (reloaded every tile) | one weight wrong until the next tile. `11` is caught | medium | already scrubbed by the per-tile reload. `11` detection | done | 0 |
-| Row-tag delay line (`tag_sr`) | 155 | 31 cycles | a result is added into the **wrong accumulator row**, or starts a fresh sum | **high** (silent) | TMR | planned (rank 2) | +310 FFs + voters, about 0.02 mm^2 |
+| Row-tag delay line (`tag_sr`) | 155 | 31 cycles | a result is added into the **wrong accumulator row**, or starts a fresh sum | **high** (silent) | TMR per stage (31 `tmr_reg`s, valid bits included), sticky `STATUS[8]` | **done** | +372 FFs + voters, about 0.025 mm^2 |
 | Control state (`act`, `*_pend`, `ld_run`/`ld_k`, postproc `run`/`g`) | about 40 | always live | bus hangs or skips an access (SEFI) | **high** (hangs the CPU) | TMR on state FFs, plus a CPU-side timeout or watchdog in firmware | planned (rank 3) | +80 FFs, about 0.005 mm^2 |
 | Accumulator (`accum_buf`) | 8,192 | one layer | one output neuron wrong for one image | medium (transient) | none in hardware: TMR would be about +0.8 mm^2. Optional firmware re-run-and-compare for critical inputs | firmware option | 0 |
 | BIAS | 768 | one 16-output group | every image in that group off by a constant | medium | parity per half-word, sticky `STATUS[6]`. Firmware rewrites BIAS (it does every group anyway) | **done** (#10) | 32 FFs + XOR, about 0.01 mm^2 |
@@ -63,7 +63,7 @@ Each item can be its own issue.
 1. ~~**WMEM parity**~~: done. Byte parity in flip-flops (the stock SRAM has no spare column), checked on
    tile stream and bus reads, sticky `STATUS[7]`. Test: `test_wb.wmem_parity` (a `00`→`01` flip the `11` code misses).
    Note: after power-up the SRAM holds random data, so reading a word that was never written can flag a false error.
-2. **TMR the row-tag delay line.** Test: flip one copy mid-stream; results must still match.
+2. ~~**TMR the row-tag delay line**~~: done, valid bits included. Test: `test_core.tag_tmr_flip`.
 3. **TMR the control state, plus a firmware timeout.**
    - Hardware: TMR on `act`, `mem_pend`, `bias_pend`, `rd_pend`, `ld_run`, `ld_k`, and the postproc counters.
    - Firmware: give up on `busy` after N polls and reset the NPU.
@@ -74,4 +74,4 @@ Each item can be its own issue.
    - The fraction that's neither is our *silent data corruption* rate, the headline radiation number.
 6. **Optional firmware re-run-and-compare** for the accumulator: costs time, not area.
 
-Done: PP_CFG TMR, BIAS parity, per-source STATUS bits (#10), WMEM byte parity.
+Done: PP_CFG TMR, BIAS parity, per-source STATUS bits (#10), WMEM byte parity, row-tag TMR.

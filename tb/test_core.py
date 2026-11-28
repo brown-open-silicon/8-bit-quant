@@ -4,6 +4,8 @@
    49 K-tiles, 16 neurons x 8 images) are summed ON CHIP; reading the
    accumulator must match Python exactly.
 2. random_multitile: random K-tile counts / vector counts / addresses.
+3. tag_tmr_flip:     radiation flips one copy of a row tag while it's in flight;
+                     TMR must outvote it (results still exact) and pulse tag_err.
 (Overflow is tested on accum_buf alone with a narrow ACC_W: tb/test_accum.py.)
 """
 import json
@@ -204,3 +206,38 @@ async def full_model_mnist(dut):
     assert dut.err.value == 0 and dut.ovf.value == 0
     dut._log.info(f"full model on RTL: {n_img} images bit-exact vs Python, "
                   f"{correct}/{n_img} correct ({100 * correct / n_img:.1f}%)")
+
+
+@cocotb.test()
+async def tag_tmr_flip(dut):
+    await reset(dut)
+    rng = random.Random(21)
+    addrs = list(range(8))
+    tiles = [([[rng.choice([0b00, 0b01, 0b10]) for _ in range(N)] for _ in range(N)],
+              [[rng.randint(-128, 127) for _ in range(N)] for _ in range(len(addrs))])
+             for _ in range(2)]
+    seen = []
+
+    async def watch():
+        while True:
+            await RisingEdge(dut.clk)
+            if dut.tag_err.value == 1:
+                seen.append(1)
+    cocotb.start_soon(watch())
+
+    async def strike():
+        for _ in range(N):                       # wait until the tags are mid-line
+            await FallingEdge(dut.clk)
+        for stage, copy in ((3, "ua"), (10, "ub"), (20, "uc")):
+            r = getattr(dut.g_tag[stage].u_tag, copy).r
+            r.value = int(r.value) ^ 0b00101     # flip addr bits 0 and 2 in one copy
+            await FallingEdge(dut.clk)
+
+    await load_weights(dut, tiles[0][0])
+    await stream_tile(dut, tiles[0][1], addrs, first=True)
+    await load_weights(dut, tiles[1][0])
+    cocotb.start_soon(strike())
+    await stream_tile(dut, tiles[1][1], addrs, first=False)
+    got = await read_rows(dut, addrs)
+    assert got == ref_layer(tiles, len(addrs)), "a single flipped tag copy changed the results"
+    assert seen, "tag_err never pulsed"

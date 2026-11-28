@@ -57,7 +57,8 @@ module core_ternary #(
     // status
     input  logic                  err_clear,
     output logic                  err,        // bit-flipped weight seen (code 11)
-    output logic                  ovf         // accumulator overflow
+    output logic                  ovf,        // accumulator overflow
+    output logic                  tag_err     // pulse: TMR repaired a flipped row tag
 );
     logic                  arr_valid;
     logic [PSUM_W*N-1:0]   arr_c;
@@ -72,19 +73,27 @@ module core_ternary #(
         .err
     );
 
-    // tag delay line: {first, addr} travels with the data
-    logic [AW:0] tag_sr [LAT];
-    logic [LAT-1:0] inflight;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (int i = 0; i < LAT; i++) tag_sr[i] <= '0;
-            inflight <= '0;
-        end else begin
-            tag_sr[0] <= {in_first, in_addr};
-            for (int i = 1; i < LAT; i++) tag_sr[i] <= tag_sr[i-1];
-            inflight <= {inflight[LAT-2:0], in_valid};
+    // tag delay line: {valid, first, addr} travels with the data.
+    // Triple-redundant per stage (tmr_reg, 3 copies + vote, each stage loads the
+    // previous stage's vote): a flipped tag would silently add a result into the
+    // wrong accumulator row (docs/radiation.md, rank 2). tag_err pulses on a repair.
+    localparam int TW = AW + 2;
+    logic [TW-1:0]  tag_q [LAT];
+    logic [LAT-1:0] tag_e;
+    genvar t;
+    generate
+        for (t = 0; t < LAT; t++) begin : g_tag
+            tmr_reg #(.W(TW)) u_tag (
+                .clk, .rst_n, .we (1'b1),
+                .d   (t == 0 ? {in_valid, in_first, in_addr} : tag_q[t == 0 ? 0 : t - 1]),
+                .q   (tag_q[t]),
+                .err (tag_e[t])
+            );
         end
-    end
+    endgenerate
+    logic [LAT-1:0] inflight;
+    always_comb for (int i = 0; i < LAT; i++) inflight[i] = tag_q[i][TW-1];
+    assign tag_err = |tag_e;
     logic pp_busy;
     logic acc_busy;
     assign busy = |inflight | acc_busy | pp_busy;
@@ -92,8 +101,8 @@ module core_ternary #(
     accum_buf #(.N(N), .IN_W(PSUM_W), .ACC_W(ACC_W), .DEPTH(DEPTH)) u_acc (
         .clk, .rst_n,
         .in_valid (arr_valid),
-        .in_first (tag_sr[LAT-1][AW]),
-        .in_addr  (tag_sr[LAT-1][AW-1:0]),
+        .in_first (tag_q[LAT-1][AW]),
+        .in_addr  (tag_q[LAT-1][AW-1:0]),
         .in_vec   (arr_c),
         .rd_en, .rd_addr, .rd_valid, .rd_vec, .busy (acc_busy),
         .ovf_clear(err_clear),
