@@ -175,7 +175,7 @@ module wb_npu #(
     logic [3:0]  pexp0, pexp1;            // expected parity: bus read / tile stream
     logic        wmem_bad;
     function automatic logic [3:0] bpar(input logic [31:0] w);
-        return {^w[31:24], ^w[23:16], ^w[15:8], ^w[7:0]};
+        bpar = {^w[31:24], ^w[23:16], ^w[15:8], ^w[7:0]};
     endfunction
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
