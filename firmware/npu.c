@@ -20,9 +20,16 @@ static inline uint32_t rd(uint32_t off) {
 int  npu_present(void)      { return rd(NPU_ID) == NPU_ID_VALUE; }
 void npu_clear_errors(void) { wr(NPU_CTRL, 1); }
 
-static void wait_idle(void) {
-    while (rd(NPU_STATUS) & NPU_BUSY) { }
+// Radiation can leave a flag stuck; never spin forever (docs/radiation.md).
+static uint32_t fw_timeout;
+
+static void wait_status(uint32_t mask, uint32_t want) {
+    for (int i = 0; i < NPU_POLL_MAX; i++)
+        if ((rd(NPU_STATUS) & mask) == want) return;
+    fw_timeout = NPU_FW_TIMEOUT;
 }
+
+static void wait_idle(void) { wait_status(NPU_BUSY, 0); }
 
 // Copy one 16-input slice of a vector into A_VEC0..3 and push it into acc row `row`.
 static void push(const int8_t *a, int n_valid, int row, int first) {
@@ -51,6 +58,7 @@ uint32_t npu_dense(const int8_t *x, int n_vec, int n_in,
                    const uint32_t *rows, int n_out,
                    int16_t m, uint8_t sh, const int64_t *bias, int relu,
                    int8_t *q_out, int32_t *wide_out) {
+    fw_timeout = 0;
     const int n_tiles = (n_in + NPU_N - 1) / NPU_N;
     for (int n0 = 0; n0 < n_out; n0 += NPU_N) {
         const uint32_t *grp = rows + (n0 / NPU_N) * n_tiles * NPU_N;
@@ -73,7 +81,7 @@ uint32_t npu_dense(const int8_t *x, int n_vec, int n_in,
         int keep = n_out - n0 < NPU_N ? n_out - n0 : NPU_N;
         for (int v = 0; v < n_vec; v++) {
             wr(NPU_READ, (uint32_t)v);
-            while (!(rd(NPU_STATUS) & NPU_READY)) { }
+            wait_status(NPU_READY, NPU_READY);
             if (wide_out)
                 for (int n = 0; n < keep; n++)
                     wide_out[v * n_out + n0 + n] = (int32_t)rd(NPU_WIDE + 4 * n);
@@ -85,5 +93,5 @@ uint32_t npu_dense(const int8_t *x, int n_vec, int n_in,
                 }
         }
     }
-    return rd(NPU_STATUS);
+    return rd(NPU_STATUS) | fw_timeout;
 }

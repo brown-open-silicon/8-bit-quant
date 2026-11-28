@@ -24,7 +24,12 @@ enum { NPU_BUSY = 1, NPU_ERR = 2, NPU_OVF = 4, NPU_READY = 8,
        NPU_W_ERR = 16,      // weight stored as 11 (bit flip)
        NPU_CFG_ERR = 32,    // PP_CFG copy flipped; TMR already repaired it
        NPU_BIAS_ERR = 64,   // BIAS parity error: rewrite BIAS, then clear
-       NPU_WMEM_ERR = 128 }; // weight SRAM parity error: re-send the tile, then clear
+       NPU_WMEM_ERR = 128,  // weight SRAM parity error: re-send the tile, then clear
+       NPU_TAG_ERR = 256 }; // row-tag copy flipped; TMR already repaired it
+// Not a hardware bit: npu_dense() ORs this in if the NPU stopped answering
+// (busy or not-ready for NPU_POLL_MAX polls). Reset the NPU and retry.
+#define NPU_FW_TIMEOUT 0x80000000u
+#define NPU_POLL_MAX   100000
 enum { NPU_N = 16, NPU_WMEM_TILES = 16, NPU_ID_VALUE = 0x4E505531 };
 
 #ifdef NPU_HOST
@@ -44,7 +49,7 @@ void npu_host_bind(npu_wr_fn wr, npu_rd_fn rd);
 //   bias:   n_out int64 (only the low 48 bits are used)
 //   q_out:  n_vec x n_out int8 results     (NULL to skip)
 //   wide_out: n_vec x n_out int32 results  (NULL to skip; e.g. final logits)
-// Returns STATUS at the end (check NPU_ERR / NPU_OVF).
+// Returns STATUS at the end (check NPU_ERR / NPU_OVF / NPU_FW_TIMEOUT).
 uint32_t npu_dense(const int8_t *x, int n_vec, int n_in,
                    const uint32_t *rows, int n_out,
                    int16_t m, uint8_t sh, const int64_t *bias, int relu,
