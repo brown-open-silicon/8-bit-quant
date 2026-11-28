@@ -338,15 +338,22 @@ module wb_npu #(
 
     // results are latched so the CPU can read them at its own pace
     // copy wide_vec and q_vec into q_res/wide_res when pp_valid. Copy them because the cpu is slow. It reads them over the bus later, one word at a time
+    // (issue #6, r6: the old "clear on READ write, else load" if/else put the bus
+    // address decode in front of the load enable of all 640 result flops.)
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            q_res <= '0; wide_res <= '0; res_ready <= 1'b0;
-        end else if (wr && widx == 7'h0B) begin   // clear on the READ write itself, so a
-            res_ready <= 1'b0;                     // status poll can never see the old result
-
+            q_res <= '0; wide_res <= '0;
         end else if (pp_valid) begin
-            q_res <= q_vec; wide_res <= wide_vec; res_ready <= 1'b1;
+            q_res <= q_vec; wide_res <= wide_vec;
         end
+    end
+    // res_ready clears on rd_en, the registered READ pulse (one cycle after the READ
+    // write). The earliest STATUS read after a READ samples 2 cycles later, so a poll
+    // still never sees the old result as ready.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)        res_ready <= 1'b0;
+        else if (rd_en)    res_ready <= 1'b0;
+        else if (pp_valid) res_ready <= 1'b1;
     end
 
     // ---- read mux (issue #6: split over 2 cycles)
