@@ -111,7 +111,11 @@ module wb_npu #(
             rd_pend   <= rd_reg;                    // register read: final mux next cycle
             // Issue #6: writes ack in cycle 2, except BIAS writes (cycle 3, bias_pend).
             // All reads ack in cycle 3 (mem_pend / rd_pend).
-            wbs_ack_o <= (req && we_q && !bias_wr) || mem_pend || bias_pend || rd_pend;
+            // Only ack while the master is actually holding stb/cyc (Wishbone rule). A
+            // flipped *_pend bit could otherwise ack between transfers and put the CPU
+            // one ack ahead of the NPU (seen in the fault campaign as a hang).
+            wbs_ack_o <= wbs_stb_i && wbs_cyc_i &&
+                         ((req && we_q && !bias_wr) || mem_pend || bias_pend || rd_pend);
         end
     end
 

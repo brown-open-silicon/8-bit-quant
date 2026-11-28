@@ -62,7 +62,7 @@ module accum_buf #(
     assign busy = v1;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin v1 <= 1'b0; a1 <= '0; chk1 <= 1'b0; end
-        else begin        v1 <= in_valid; a1 <= in_addr; chk1 <= in_valid && !in_first && !fwd; end
+        else begin        v1 <= in_valid; a1 <= in_addr; chk1 <= in_valid && !fwd; end
     end
 
     genvar n;
@@ -75,7 +75,7 @@ module accum_buf #(
                 if (in_valid) begin
                     x1    <= ACC_W'($signed(in_vec[IN_W*n +: IN_W]));
                     base1 <= in_first ? '0 : (fwd ? sum : mem[in_addr][n]);
-                    bpar1 <= par[in_addr][n];
+                    bpar1 <= in_first ? 1'b0 : par[in_addr][n];   // parity of 0 is 0
                 end
             end
             assign lane_perr1[n] = v1 && chk1 && ((^base1) != bpar1);

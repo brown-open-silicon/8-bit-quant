@@ -10,7 +10,8 @@ copies. Each trial lands in one bucket:
   detected     wrong answer, flagged     (STATUS.err: firmware knows to retry)
   corrected    right answer, flagged     (TMR repaired it, or flag only)
   SDC          wrong answer, NO flag     (silent data corruption: the bad one)
-  hang         the run never finished
+  timeout      firmware's poll limit tripped (it knows: reset and retry)
+  hang         the bus itself stopped answering
 
   FI_TRIALS=500 python3 tb/run.py fault     # campaign size (default 40)
   FI_SEED=1 ...                              # different random draw
@@ -26,7 +27,7 @@ import cocotb.utils
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge, with_timeout
 
-from npu_driver import ERR, STATUS, Npu
+from npu_driver import ERR, STATUS, Npu, NpuTimeout
 
 VECTORS = Path(__file__).parent / "vectors"
 OUT = Path(__file__).parent.parent / "build" / "fault_results.json"
@@ -134,6 +135,7 @@ async def reset(dut):
 
 async def run_layer2(dut, d, n_img):
     npu = await reset(dut)
+    npu.poll_max = 2000                          # trips well before the hang watchdog
     out = await npu.dense(d["hq"][:n_img], d["w2"], d["m2"], d["sh2"], d["b2"],
                           relu=False, wide=True, wmem=True)
     return out, await npu.read(STATUS)
@@ -164,7 +166,7 @@ async def fault_campaign(dut):
     assert not bad, "unknown fault sites:\n" + "\n".join(bad[:20])
     weights = [w for _, w, _ in S]
     total_bits = sum(weights)
-    buckets = {k: 0 for k in ("masked", "detected", "corrected", "SDC", "hang")}
+    buckets = {k: 0 for k in ("masked", "detected", "corrected", "SDC", "timeout", "hang")}
     by_region, log = {}, []
     for i in range(trials):
         path, width, region = rng.choices(S, weights=weights)[0]
@@ -183,6 +185,8 @@ async def fault_campaign(dut):
             right, flagged = got == want, bool(st & ERR)
             b = ("masked" if right and not flagged else "corrected" if right else
                  "detected" if flagged else "SDC")
+        except NpuTimeout:
+            b = "timeout"
         except Exception:                        # cocotb.triggers.SimTimeoutError
             b = "hang"
         if strike.skipped:
@@ -191,7 +195,7 @@ async def fault_campaign(dut):
         r = by_region.setdefault(region, {k: 0 for k in buckets})
         r[b] += 1
         log.append({"path": path, "bit": bit, "cycle": when, "region": region, "result": b})
-        if b in ("SDC", "hang"):
+        if b in ("SDC", "timeout", "hang"):
             dut._log.info(f"trial {i}: {b} after flipping {path} bit {bit} at cycle {when}")
 
     OUT.parent.mkdir(exist_ok=True)

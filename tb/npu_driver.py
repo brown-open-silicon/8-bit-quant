@@ -14,6 +14,13 @@ BUSY, ERR, OVF, READY = 1, 2, 4, 8
 W_ERR, CFG_ERR, BIAS_ERR, WMEM_ERR, TAG_ERR, ACC_ERR = 16, 32, 64, 128, 256, 512   # which kind of bit flip (all also set ERR)
 
 
+POLL_MAX = 100_000                     # same limit as firmware/npu.h NPU_POLL_MAX
+
+
+class NpuTimeout(Exception):
+    """The NPU stopped answering a status poll (firmware would reset and retry)."""
+
+
 def _s(v, bits):
     v &= (1 << bits) - 1
     return v - (1 << bits) if v >> (bits - 1) else v
@@ -24,6 +31,7 @@ class Npu:
         self.dut = dut
         self.base = base                  # 0x3000_0000 when driven through user_project_wrapper
         self.n_access = 0
+        self.poll_max = POLL_MAX
 
     # ---------------------------------------------------------- bus primitives
     async def _cycle(self, addr, we, data=0):
@@ -98,8 +106,10 @@ class Npu:
         await self.write(PUSH, (row & 0xF) | (int(first) << 4))
 
     async def wait_idle(self):
-        while await self.read(STATUS) & BUSY:
-            pass
+        for _ in range(self.poll_max):
+            if not await self.read(STATUS) & BUSY:
+                return
+        raise NpuTimeout("busy never cleared")
 
     async def configure(self, m, sh, relu, bias):
         await self.write(PP_CFG, (m & 0xFFFF) | (sh << 16) | (int(relu) << 24))
@@ -110,8 +120,11 @@ class Npu:
 
     async def read_row(self, row, wide=False):
         await self.write(READ, row)
-        while not (await self.read(STATUS) & READY):
-            pass
+        for _ in range(self.poll_max):
+            if await self.read(STATUS) & READY:
+                break
+        else:
+            raise NpuTimeout("result never ready")
         if wide:
             return [_s(await self.read(WIDE + 4 * n), 32) for n in range(N)]
         out = []
