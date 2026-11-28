@@ -10,6 +10,9 @@
 6. sram_bitflip:     a flip inside the SRAM is caught when the tile streams in.
 7. ppcfg_tmr_flip:   a flip in one PP_CFG copy is outvoted, repaired, and reported.
 8. bias_parity:      a flip in a BIAS register is caught by parity until BIAS is rewritten.
+9. wmem_parity:      a 00 -> 01 flip in the SRAM (which the 11 code can't see) is caught by
+                     byte parity on the tile stream and on a bus read; byte-masked writes
+                     keep parity right.
 """
 import json
 import random
@@ -20,7 +23,7 @@ import cocotb.utils
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
 
-from npu_driver import (BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, Npu, PP_CFG,
+from npu_driver import (BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, WMEM_ERR, Npu, PP_CFG,
                         STATUS, W_DATA)
 
 VECTORS = Path(__file__).parent / "vectors"
@@ -172,3 +175,33 @@ async def bias_parity(dut):
     await npu.write(BIAS + 8 * 9 + 4, ((b + 9) >> 32) & 0xFFFF)   # firmware reloads the word
     await npu.write(CTRL, 1)
     assert await npu.read(STATUS) & (ERR | BIAS_ERR) == 0
+
+
+@cocotb.test()
+async def wmem_parity(dut):
+    npu = await reset(dut)
+    rng = random.Random(9)
+    w = [[rng.choice([0, 1, 2]) for _ in range(16)] for _ in range(16)]
+    w[4][6] = 0                                  # this weight gets hit below
+    await npu.store_tile(2, w)
+    await npu._cycle_sel(WMEM + 4 * (16 * 2 + 7), 0xA5A5A5A5, 0b0100)   # byte-masked write
+    w[7] = [(((await npu.read(WMEM + 4 * (16 * 2 + 7))) >> (2 * n)) & 3) for n in range(16)]
+    await npu.load_tile(2)
+    await npu.wait_idle()
+    assert await npu.read(STATUS) & ERR == 0, "clean tile (with a masked write) flagged"
+    row = 16 * 2 + 4
+    mem = dut.u_wmem.mem[row]
+    mem.value = int(mem.value) | (0b01 << (2 * 6))   # radiation: weight 0 -> +1, a valid code
+    await npu.load_tile(2)
+    await npu.wait_idle()
+    st = await npu.read(STATUS)
+    assert st & WMEM_ERR and st & ERR and not st & W_ERR, f"tile-stream parity: STATUS = {st:#x}"
+    await npu.write(CTRL, 1)
+    assert await npu.read(STATUS) & ERR == 0
+    await npu.read(WMEM + 4 * row)               # the bus read path checks too
+    assert await npu.read(STATUS) & WMEM_ERR, "bus-read parity miss"
+    await npu.store_tile(2, w)                   # firmware re-sends the tile
+    await npu.write(CTRL, 1)
+    await npu.load_tile(2)
+    await npu.wait_idle()
+    assert await npu.read(STATUS) & ERR == 0, "re-sent tile still flagged"

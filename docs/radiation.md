@@ -21,7 +21,7 @@ which is how long a flip can do damage.
 
 | Block | Bits | Lifetime | If one bit flips | Severity | Protection | Status | Extra area |
 |---|---|---|---|---|---|---|---|
-| Weight SRAM (WMEM) | 8,192 | whole layer, or longer | one weight wrong for every image until reload. A flip into code `11` is caught (2 of the 6 possible single flips) | **high** (silent, long-lived) | parity per 32-bit word, checked on bus read and tile stream. Firmware reloads the tile | planned (rank 1) | 256 FFs + XOR trees, about 0.02 mm^2 |
+| Weight SRAM (WMEM) | 8,192 | whole layer, or longer | one weight wrong for every image until reload. A flip into code `11` is caught (2 of the 6 possible single flips) | **high** (silent, long-lived) | parity per SRAM byte (per byte so masked writes work), checked on bus read and tile stream, sticky `STATUS[7]`. Firmware re-sends the tile | **done** | 1,024 FFs + XOR trees, about 0.06 mm^2 |
 | PE weight registers | 512 | one K-tile (reloaded every tile) | one weight wrong until the next tile. `11` is caught | medium | already scrubbed by the per-tile reload. `11` detection | done | 0 |
 | Row-tag delay line (`tag_sr`) | 155 | 31 cycles | a result is added into the **wrong accumulator row**, or starts a fresh sum | **high** (silent) | TMR | planned (rank 2) | +310 FFs + voters, about 0.02 mm^2 |
 | Control state (`act`, `*_pend`, `ld_run`/`ld_k`, postproc `run`/`g`) | about 40 | always live | bus hangs or skips an access (SEFI) | **high** (hangs the CPU) | TMR on state FFs, plus a CPU-side timeout or watchdog in firmware | planned (rank 3) | +80 FFs, about 0.005 mm^2 |
@@ -60,10 +60,9 @@ That's why they go first, even though they hold far fewer bits.
 
 Each item can be its own issue.
 
-1. **WMEM word parity:**
-   - Hardware: 256 parity bits in flip-flops (the stock SRAM is exactly 32 bits wide, so there's no spare column). Check on every port-1 tile read and port-0 bus read. Sticky `STATUS[7]`.
-   - Firmware: re-send that tile.
-   - Test: flip a bit in the SRAM model (like `test_wb.sram_bitflip`, but a `00`→`01` flip that the `11` code misses).
+1. ~~**WMEM parity**~~: done. Byte parity in flip-flops (the stock SRAM has no spare column), checked on
+   tile stream and bus reads, sticky `STATUS[7]`. Test: `test_wb.wmem_parity` (a `00`→`01` flip the `11` code misses).
+   Note: after power-up the SRAM holds random data, so reading a word that was never written can flag a false error.
 2. **TMR the row-tag delay line.** Test: flip one copy mid-stream; results must still match.
 3. **TMR the control state, plus a firmware timeout.**
    - Hardware: TMR on `act`, `mem_pend`, `bias_pend`, `rd_pend`, `ld_run`, `ld_k`, and the postproc counters.
@@ -75,4 +74,4 @@ Each item can be its own issue.
    - The fraction that's neither is our *silent data corruption* rate, the headline radiation number.
 6. **Optional firmware re-run-and-compare** for the accumulator: costs time, not area.
 
-Done: PP_CFG TMR, BIAS parity, per-source STATUS bits (#10).
+Done: PP_CFG TMR, BIAS parity, per-source STATUS bits (#10), WMEM byte parity.

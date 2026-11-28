@@ -23,7 +23,8 @@ enum {
 enum { NPU_BUSY = 1, NPU_ERR = 2, NPU_OVF = 4, NPU_READY = 8,
        NPU_W_ERR = 16,      // weight stored as 11 (bit flip)
        NPU_CFG_ERR = 32,    // PP_CFG copy flipped; TMR already repaired it
-       NPU_BIAS_ERR = 64 }; // BIAS parity error: rewrite BIAS, then clear
+       NPU_BIAS_ERR = 64,   // BIAS parity error: rewrite BIAS, then clear
+       NPU_WMEM_ERR = 128 }; // weight SRAM parity error: re-send the tile, then clear
 enum { NPU_N = 16, NPU_WMEM_TILES = 16, NPU_ID_VALUE = 0x4E505531 };
 
 #ifdef NPU_HOST

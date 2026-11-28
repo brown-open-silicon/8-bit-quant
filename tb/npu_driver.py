@@ -10,7 +10,7 @@ A_VEC, PUSH, PP_CFG, READ, W_TILE = 0x014, 0x024, 0x028, 0x02C, 0x030
 Q, WIDE, BIAS, WMEM = 0x040, 0x080, 0x100, 0x400
 WMEM_TILES = 16                       # 1 KB SRAM = 256 rows = 16 tiles
 BUSY, ERR, OVF, READY = 1, 2, 4, 8
-W_ERR, CFG_ERR, BIAS_ERR = 16, 32, 64       # which kind of bit flip (all also set ERR)
+W_ERR, CFG_ERR, BIAS_ERR, WMEM_ERR = 16, 32, 64, 128   # which kind of bit flip (all also set ERR)
 
 
 def _s(v, bits):

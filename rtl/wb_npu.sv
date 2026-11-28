@@ -8,7 +8,7 @@
 //   0x000  ID        R       0x4E505531 ("NPU1")
 //   0x004  STATUS    R       [0] busy  [1] err (any bit flip seen)  [2] ovf  [3] result ready
 //                            [4] weight flip (code 11)  [5] PP_CFG copy flip (TMR, repaired)
-//                            [6] BIAS parity error (reload BIAS)
+//                            [6] BIAS parity error (reload BIAS)  [7] WMEM parity error (re-send tile)
 //   0x008  CTRL      W       [0] clear err/ovf (a BIAS parity error stays until BIAS is rewritten)
 //   0x00C  W_DATA    RW      one weight row: 16 x 2-bit codes, lane n = bits [2n+1:2n]
 //   0x010  W_LOAD    W       write k -> load W_DATA into array row k
@@ -151,6 +151,45 @@ module wb_npu #(
         end
     end
 
+    // ---- WMEM parity (radiation plan rank 1, docs/radiation.md)
+    // One even-parity bit per SRAM byte, kept in flip-flops (the stock macro is exactly
+    // 32 bits wide, no spare column). Catches every single-bit flip in the weights;
+    // the 11 code alone only catches 2 of the 6 possible single flips.
+    //   write: cycle 2 writes the SRAM and saves {row, mask, parity}; cycle 3 writes the
+    //          parity flops from those (keeps the 256-row decode off adr_q's cycle)
+    //   check: expected parity is fetched the same cycle the SRAM read is issued, and
+    //          compared with the data when it comes back
+    logic [3:0]  wpar [256];
+    logic        wp_go;
+    logic [7:0]  wp_row;
+    logic [3:0]  wp_mask, wp_bits;
+    logic [3:0]  pexp0, pexp1;            // expected parity: bus read / tile stream
+    logic        wmem_bad;
+    function automatic logic [3:0] bpar(input logic [31:0] w);
+        return {^w[31:24], ^w[23:16], ^w[15:8], ^w[7:0]};
+    endfunction
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            for (int r = 0; r < 256; r++) wpar[r] <= '0;
+            wp_go <= 1'b0; wp_row <= '0; wp_mask <= '0; wp_bits <= '0;
+            pexp0 <= '0; pexp1 <= '0;
+        end else begin
+            wp_go <= req && mem_sel && we_q;
+            if (req && mem_sel && we_q) begin
+                wp_row <= adr_q[9:2]; wp_mask <= sel_q; wp_bits <= bpar(dat_q);
+            end
+            if (wp_go)
+                for (int b = 0; b < 4; b++)
+                    if (wp_mask[b]) wpar[wp_row][b] <= wp_bits[b];
+            if (req && mem_sel && !we_q) pexp0 <= wpar[adr_q[9:2]];
+            if (ld_run)                  pexp1 <= wpar[{ld_tile, ld_k}];
+        end
+    end
+    // reset leaves both SRAM contents and parity undefined vs each other, so firmware
+    // must write a tile before streaming it (it always does)
+    assign wmem_bad = (mem_pend && (bpar(mem_dout0) != pexp0)) ||
+                      (ld_v     && (bpar(mem_dout1) != pexp1));
+
     // front desk registers
     logic [31:0]        w_data; // one weight row, waiting to be loaded
     logic [8*N-1:0]     a_vec; // 16 int 8 inputs
@@ -235,11 +274,12 @@ module wb_npu #(
         end
     endgenerate
 
-    logic cfg_err, bias_err;              // sticky, cleared by CTRL[0]
+    logic cfg_err, bias_err, wmem_err;    // sticky, cleared by CTRL[0]
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            cfg_err <= 1'b0; bias_err <= 1'b0;
+            cfg_err <= 1'b0; bias_err <= 1'b0; wmem_err <= 1'b0;
         end else begin
+            wmem_err <= wmem_bad | (wmem_err & !err_clear);
             cfg_err  <= cfg_tmr_err | (cfg_err  & !err_clear);
             bias_err <= (|bias_bad) | (bias_err & !err_clear);
         end
@@ -247,7 +287,7 @@ module wb_npu #(
 
     // ---- the compute core (weight rows come from W_LOAD or from a W_TILE burst)
     logic w_err, err, ovf, pp_valid;
-    assign err = w_err | cfg_err | bias_err;
+    assign err = w_err | cfg_err | bias_err | wmem_err;
     logic [32*N-1:0] wide_vec, rd_vec_unused; // wide_vec, 16xint32, the full precision answers
     logic [8*N-1:0]  q_vec; // 16 x int8, the final small answers after the shift, ReLU & Saturates. These are what the next layer uses
     logic            rd_valid_unused;
@@ -305,7 +345,7 @@ module wb_npu #(
             case (widx[4:0])
                 5'h00: rd_misc <= ID;
                 // busy also covers a PUSH accepted this cycle that hasn't entered the pipe yet
-                5'h01: rd_misc <= {25'b0, bias_err, cfg_err, w_err, res_ready, ovf, err, busy | in_valid | loading};
+                5'h01: rd_misc <= {24'b0, wmem_err, bias_err, cfg_err, w_err, res_ready, ovf, err, busy | in_valid | loading};
                 5'h03: rd_misc <= w_data;
                 5'h05: rd_misc <= a_vec[31:0];
                 5'h06: rd_misc <= a_vec[63:32];
