@@ -68,7 +68,7 @@ Each item can be its own issue.
    - **No hang:** if `act` or any `*_pend` flips 1→0 while the CPU waits, the CPU is still holding `stb`. The request is captured and executed again, so the bus doesn't hang.
    - **Residual risk:** a command write (PUSH, W_LOAD, READ, W_TILE) running **twice**, or a flip 0→1 repeating the last access. That's silent corruption, not a hang. The fault-injection campaign (item 5) measures how often it happens. Fix it only if the number says so.
    - **Firmware:** every poll loop gives up after `NPU_POLL_MAX` polls and returns `NPU_FW_TIMEOUT`.
-4. **Error counter register:** a saturating count of each error type, for telemetry. "How many flips per day in orbit" is the number the mission team actually wants.
+4. ~~**Error counter register**~~: done, `ERRCNT` at 0x034 (`test_wb.errcnt`). a saturating count of each error type, for telemetry. "How many flips per day in orbit" is the number the mission team actually wants.
 5. **Fault-injection regression:**
    - A cocotb test that flips a random FF anywhere in `wb_npu` during a full MNIST run.
    - It checks that the result is either still correct or flagged in `STATUS`.

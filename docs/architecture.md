@@ -51,7 +51,7 @@ Weight encoding (2 bits): `00` = 0, `01` = +1, `10` = -1, `11` = invalid (bit-fl
 |---|---|---|---|
 | 0x000 | ID | R | `0x4E505531` ("NPU1") |
 | 0x004 | STATUS | R | [0] busy [1] any bit-flip error [2] overflow [3] result ready [4] weight code 11 [5] PP_CFG copy flip (TMR-repaired) [6] BIAS parity [7] WMEM parity [8] row-tag copy flip (TMR-repaired) |
-| 0x008 | CTRL | W | [0] clear error/overflow |
+| 0x008 | CTRL | W | [0] clear error/overflow [1] clear ERRCNT |
 | 0x00C | W_DATA | RW | one weight row: 16 x 2-bit, lane n = bits [2n+1:2n] |
 | 0x010 | W_LOAD | W | k: load W_DATA into array row k |
 | 0x014-0x020 | A_VEC0-3 | RW | 16 int8 inputs, 4 per word |
@@ -59,6 +59,7 @@ Weight encoding (2 bits): `00` = 0, `01` = +1, `10` = -1, `11` = invalid (bit-fl
 | 0x028 | PP_CFG | RW | [15:0] m (signed) [21:16] shift [24] ReLU |
 | 0x02C | READ | W | [3:0] row: requantize it into Q / WIDE |
 | 0x030 | W_TILE | W | [3:0] t: stream tile t from the weight SRAM into the array (16 cycles) |
+| 0x034 | ERRCNT | R | saturating upset counters: [7:0] weight 11, [15:8] PP_CFG TMR, [23:16] BIAS/WMEM parity, [31:24] row-tag TMR |
 | 0x040-0x04C | Q0-3 | R | 16 int8 results |
 | 0x080-0x0BC | WIDE0-15 | R | 16 int32 results |
 | 0x100-0x17C | BIAS | RW | lane n: 0x100+8n = bits [31:0], 0x104+8n = bits [47:32] |

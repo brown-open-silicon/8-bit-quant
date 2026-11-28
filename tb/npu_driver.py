@@ -7,6 +7,7 @@ from cocotb.triggers import FallingEdge
 N = 16
 ID, STATUS, CTRL, W_DATA, W_LOAD = 0x000, 0x004, 0x008, 0x00C, 0x010
 A_VEC, PUSH, PP_CFG, READ, W_TILE = 0x014, 0x024, 0x028, 0x02C, 0x030
+ERRCNT = 0x034
 Q, WIDE, BIAS, WMEM = 0x040, 0x080, 0x100, 0x400
 WMEM_TILES = 16                       # 1 KB SRAM = 256 rows = 16 tiles
 BUSY, ERR, OVF, READY = 1, 2, 4, 8

@@ -13,6 +13,7 @@
 9. wmem_parity:      a 00 -> 01 flip in the SRAM (which the 11 code can't see) is caught by
                      byte parity on the tile stream and on a bus read; byte-masked writes
                      keep parity right.
+10. errcnt:          ERRCNT counts each kind of upset once per event, CTRL[1] clears it.
 """
 import json
 import random
@@ -23,7 +24,7 @@ import cocotb.utils
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
 
-from npu_driver import (BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, WMEM_ERR, Npu, PP_CFG,
+from npu_driver import (ERRCNT, BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, WMEM_ERR, Npu, PP_CFG,
                         STATUS, W_DATA)
 
 VECTORS = Path(__file__).parent / "vectors"
@@ -205,3 +206,26 @@ async def wmem_parity(dut):
     await npu.load_tile(2)
     await npu.wait_idle()
     assert await npu.read(STATUS) & ERR == 0, "re-sent tile still flagged"
+
+
+@cocotb.test()
+async def errcnt(dut):
+    npu = await reset(dut)
+    assert await npu.read(ERRCNT) == 0
+    cfg = 0x0115ABCD
+    await npu.write(PP_CFG, cfg)
+    for i in range(3):                           # three separate PP_CFG upsets
+        await FallingEdge(dut.wb_clk_i)
+        dut.u_ppcfg.ua.r.value = cfg ^ (1 << i)
+        await FallingEdge(dut.wb_clk_i)
+        await FallingEdge(dut.wb_clk_i)
+    rng = random.Random(8)
+    w = [[rng.choice([0, 1, 2]) for _ in range(16)] for _ in range(16)]
+    w[1][1] = 0b11
+    await npu.load_weights(w)                    # one weight upset
+    await FallingEdge(dut.wb_clk_i)
+    c = await npu.read(ERRCNT)
+    assert c & 0xFF == 1 and (c >> 8) & 0xFF == 3 and c >> 16 == 0, f"ERRCNT = {c:#010x}"
+    await npu.write(CTRL, 0b10)                  # clear counters only
+    assert await npu.read(ERRCNT) == 0
+    assert await npu.read(STATUS) & ERR, "CTRL[1] must not clear the error flags"

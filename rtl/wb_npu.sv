@@ -11,6 +11,7 @@
 //                            [6] BIAS parity error (reload BIAS)  [7] WMEM parity error (re-send tile)
 //                            [8] row-tag copy flip (TMR, repaired)
 //   0x008  CTRL      W       [0] clear err/ovf (a BIAS parity error stays until BIAS is rewritten)
+//                            [1] clear ERRCNT
 //   0x00C  W_DATA    RW      one weight row: 16 x 2-bit codes, lane n = bits [2n+1:2n]
 //   0x010  W_LOAD    W       write k -> load W_DATA into array row k
 //   0x014  A_VEC0-3  RW      16 int8 activations, 4 per word (0x014..0x020)
@@ -18,6 +19,9 @@
 //   0x028  PP_CFG    RW      [15:0] m (signed)  [21:16] shift  [24] relu
 //   0x02C  READ      W       [3:0] acc row -> requantize it; result in Q / WIDE
 //   0x030  W_TILE    W       [3:0] t -> stream weight tile t (WMEM rows 16t..16t+15)
+//   0x034  ERRCNT    R       saturating upset counters (telemetry, docs/radiation.md):
+//                            [7:0] weight 11  [15:8] PP_CFG TMR  [23:16] BIAS/WMEM parity
+//                            [31:24] row-tag TMR
 //                            into the array, 1 row/cycle (16 cycles)
 //   0x040  Q0-3      R       16 int8 results, 4 per word (0x040..0x04C)
 //   0x080  WIDE0-15  R       16 int32 results (0x080..0x0BC)
@@ -201,7 +205,7 @@ module wb_npu #(
     logic               res_ready; // result waiting to be read
 
     // one-cycle command pulses
-    logic               w_load, rd_en, err_clear;
+    logic               w_load, rd_en, err_clear, cnt_clear;
     logic [3:0]         w_row, in_addr, rd_addr;
     logic               in_first;
 
@@ -217,14 +221,14 @@ module wb_npu #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             w_data <= '0; a_vec <= '0; bias <= '0; bias_par <= '0;
-            {w_load, in_valid, rd_en, err_clear} <= '0;
+            {w_load, in_valid, rd_en, err_clear, cnt_clear} <= '0;
             {w_row, in_addr, rd_addr, in_first} <= '0;
             bias_pend <= 1'b0; bias_en <= '0;
         end else begin
-            {w_load, in_valid, rd_en, err_clear} <= '0;
+            {w_load, in_valid, rd_en, err_clear, cnt_clear} <= '0;
             if (wr) begin
                 case (widx)
-                    7'h02: err_clear <= dat_q[0];
+                    7'h02: begin err_clear <= dat_q[0]; cnt_clear <= dat_q[1]; end
                     7'h03: w_data    <= dat_q;
                     7'h04: begin w_load <= 1'b1; w_row <= dat_q[3:0]; end
                     7'h05, 7'h06, 7'h07, 7'h08:
@@ -310,6 +314,22 @@ module wb_npu #(
     );
     assign irq = err | ovf;
 
+    // ---- upset counters: count each new event (a rising edge, so a level that
+    // stays high, like an unrepaired parity error, counts once), saturate at 255
+    logic [31:0] errcnt;
+    logic [3:0]  ev, ev_q;
+    assign ev = {tag_tmr_err, wmem_bad | (|bias_bad), cfg_tmr_err, w_err};
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            errcnt <= '0; ev_q <= '0;
+        end else begin
+            ev_q <= ev;
+            for (int i = 0; i < 4; i++)
+                if (cnt_clear)                                errcnt[8*i +: 8] <= '0;
+                else if (ev[i] && !ev_q[i] && ~&errcnt[8*i +: 8]) errcnt[8*i +: 8] <= errcnt[8*i +: 8] + 1'b1;
+        end
+    end
+
     // results are latched so the CPU can read them at its own pace
     // copy wide_vec and q_vec into q_res/wide_res when pp_valid. Copy them because the cpu is slow. It reads them over the bus later, one word at a time
     always_ff @(posedge clk or negedge rst_n) begin
@@ -355,6 +375,7 @@ module wb_npu #(
                 5'h07: rd_misc <= a_vec[95:64];
                 5'h08: rd_misc <= a_vec[127:96];
                 5'h0A: rd_misc <= pp_cfg;
+                5'h0D: rd_misc <= errcnt;
                 5'h10: rd_misc <= q_res[31:0];
                 5'h11: rd_misc <= q_res[63:32];
                 5'h12: rd_misc <= q_res[95:64];
