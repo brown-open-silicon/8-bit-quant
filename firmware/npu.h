@@ -20,7 +20,10 @@ enum {
     NPU_READ = 0x02C, NPU_W_TILE = 0x030, NPU_Q = 0x040, NPU_WIDE = 0x080,
     NPU_BIAS = 0x100, NPU_WMEM = 0x400,
 };
-enum { NPU_BUSY = 1, NPU_ERR = 2, NPU_OVF = 4, NPU_READY = 8 };
+enum { NPU_BUSY = 1, NPU_ERR = 2, NPU_OVF = 4, NPU_READY = 8,
+       NPU_W_ERR = 16,      // weight stored as 11 (bit flip)
+       NPU_CFG_ERR = 32,    // PP_CFG copy flipped; TMR already repaired it
+       NPU_BIAS_ERR = 64 }; // BIAS parity error: rewrite BIAS, then clear
 enum { NPU_N = 16, NPU_WMEM_TILES = 16, NPU_ID_VALUE = 0x4E505531 };
 
 #ifdef NPU_HOST

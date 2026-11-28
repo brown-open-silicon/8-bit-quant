@@ -6,6 +6,7 @@
     "dir::../../rtl/accum_buf.sv",
     "dir::../../rtl/postproc.sv",
     "dir::../../rtl/core_ternary.sv",
+    "dir::../../rtl/tmr_reg.sv",
     "dir::../../rtl/wb_npu.sv"
   ],
   "USE_SYNLIG": false,
@@ -58,5 +59,6 @@
   "STA_THREADS": 2,
   "DRT_THREADS": 4,
   "RUN_POST_GRT_DESIGN_REPAIR": true,
-  "RUN_POST_GRT_RESIZER_TIMING": true
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "SYNTH_HIERARCHY_MODE": "deferred_flatten"
 }

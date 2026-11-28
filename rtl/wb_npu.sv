@@ -6,8 +6,10 @@
 //
 //   off    name      access  meaning
 //   0x000  ID        R       0x4E505531 ("NPU1")
-//   0x004  STATUS    R       [0] busy  [1] err (bit flip)  [2] ovf  [3] result ready
-//   0x008  CTRL      W       [0] clear err/ovf
+//   0x004  STATUS    R       [0] busy  [1] err (any bit flip seen)  [2] ovf  [3] result ready
+//                            [4] weight flip (code 11)  [5] PP_CFG copy flip (TMR, repaired)
+//                            [6] BIAS parity error (reload BIAS)
+//   0x008  CTRL      W       [0] clear err/ovf (a BIAS parity error stays until BIAS is rewritten)
 //   0x00C  W_DATA    RW      one weight row: 16 x 2-bit codes, lane n = bits [2n+1:2n]
 //   0x010  W_LOAD    W       write k -> load W_DATA into array row k
 //   0x014  A_VEC0-3  RW      16 int8 activations, 4 per word (0x014..0x020)
@@ -152,7 +154,7 @@ module wb_npu #(
     // front desk registers
     logic [31:0]        w_data; // one weight row, waiting to be loaded
     logic [8*N-1:0]     a_vec; // 16 int 8 inputs
-    logic [31:0]        pp_cfg; // scale (m, shift) + relu
+    logic [31:0]        pp_cfg; // scale (m, shift) + relu. Triple-redundant (tmr_reg), issue #10
     logic [B_W*N-1:0]   bias; // bias setting
     logic [8*N-1:0]     q_res; // result waiting to be read
     logic [32*N-1:0]    wide_res; // result waiting to be read
@@ -168,10 +170,13 @@ module wb_npu #(
     // one enable flop per BIAS half-word: bit 2n = lane n low, bit 2n+1 = lane n high.
     // One-hot, so cycle 3 needs no decoder at all (each flop drives its slot directly).
     logic [2*N-1:0]     bias_en;
+    // even parity per BIAS half-word, stored on write (issue #10: detect, don't correct.
+    // Firmware rewrites BIAS for every 16-output group, so reload is the fix.)
+    logic [2*N-1:0]     bias_par;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            w_data <= '0; a_vec <= '0; pp_cfg <= '0; bias <= '0;
+            w_data <= '0; a_vec <= '0; bias <= '0; bias_par <= '0;
             {w_load, in_valid, rd_en, err_clear} <= '0;
             {w_row, in_addr, rd_addr, in_first} <= '0;
             bias_pend <= 1'b0; bias_en <= '0;
@@ -186,7 +191,6 @@ module wb_npu #(
                            a_vec[32*(widx-7'h05) +: 32] <= dat_q;
                     7'h09: begin in_valid <= 1'b1; in_addr <= dat_q[3:0];
                                  in_first <= dat_q[4]; end
-                    7'h0A: pp_cfg    <= dat_q;
                     7'h0B: begin rd_en <= 1'b1; rd_addr <= dat_q[3:0]; end
                     default: ;
                 endcase
@@ -200,8 +204,8 @@ module wb_npu #(
             // capture is blocked while bias_pend is set.
             if (bias_pend) begin
                 for (int l = 0; l < N; l++) begin
-                    if (bias_en[2*l])     bias[B_W*l +: 32]      <= dat_q;
-                    if (bias_en[2*l + 1]) bias[B_W*l + 32 +: 16] <= dat_q[15:0];
+                    if (bias_en[2*l])     begin bias[B_W*l +: 32]      <= dat_q;       bias_par[2*l]     <= ^dat_q;       end
+                    if (bias_en[2*l + 1]) begin bias[B_W*l + 32 +: 16] <= dat_q[15:0]; bias_par[2*l + 1] <= ^dat_q[15:0]; end
                 end
                 bias_pend <= 1'b0;
                 bias_en   <= '0;
@@ -209,8 +213,41 @@ module wb_npu #(
         end
     end
 
+    genvar gl;
+
+    // ---- PP_CFG on TMR: 3 copies + majority vote; a single flip is outvoted and
+    // repaired on the next clock, so cfg_err only pulses -> kept in a sticky flag.
+    logic cfg_tmr_err;
+    tmr_reg #(.W(32)) u_ppcfg (
+        .clk, .rst_n,
+        .we  (wr && widx == 7'h0A),
+        .d   (dat_q),
+        .q   (pp_cfg),
+        .err (cfg_tmr_err)
+    );
+
+    // ---- BIAS parity check (one XOR tree per half-word, into a sticky flag)
+    logic [2*N-1:0] bias_bad;
+    generate
+        for (gl = 0; gl < N; gl++) begin : g_bpar
+            assign bias_bad[2*gl]     = (^bias[B_W*gl +: 32])      != bias_par[2*gl];
+            assign bias_bad[2*gl + 1] = (^bias[B_W*gl + 32 +: 16]) != bias_par[2*gl + 1];
+        end
+    endgenerate
+
+    logic cfg_err, bias_err;              // sticky, cleared by CTRL[0]
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cfg_err <= 1'b0; bias_err <= 1'b0;
+        end else begin
+            cfg_err  <= cfg_tmr_err | (cfg_err  & !err_clear);
+            bias_err <= (|bias_bad) | (bias_err & !err_clear);
+        end
+    end
+
     // ---- the compute core (weight rows come from W_LOAD or from a W_TILE burst)
-    logic err, ovf, pp_valid;
+    logic w_err, err, ovf, pp_valid;
+    assign err = w_err | cfg_err | bias_err;
     logic [32*N-1:0] wide_vec, rd_vec_unused; // wide_vec, 16xint32, the full precision answers
     logic [8*N-1:0]  q_vec; // 16 x int8, the final small answers after the shift, ReLU & Saturates. These are what the next layer uses
     logic            rd_valid_unused;
@@ -226,7 +263,7 @@ module wb_npu #(
         .pp_m (pp_cfg[15:0]), .pp_sh (pp_cfg[21:16]), .pp_relu (pp_cfg[24]),
         .pp_bias (bias),
         .pp_valid, .wide_vec, .q_vec,
-        .err_clear, .err, .ovf
+        .err_clear, .err (w_err), .ovf
     );
     assign irq = err | ovf;
 
@@ -250,7 +287,6 @@ module wb_npu #(
     logic [31:0] bias_lo  [N];            // per-lane views, so the muxes index cleanly
     logic [15:0] bias_hi16[N];
     logic [31:0] wide_w   [N];
-    genvar gl;
     generate
         for (gl = 0; gl < N; gl++) begin : g_rdview
             assign bias_lo[gl]   = bias[B_W*gl +: 32];
@@ -269,7 +305,7 @@ module wb_npu #(
             case (widx[4:0])
                 5'h00: rd_misc <= ID;
                 // busy also covers a PUSH accepted this cycle that hasn't entered the pipe yet
-                5'h01: rd_misc <= {28'b0, res_ready, ovf, err, busy | in_valid | loading};
+                5'h01: rd_misc <= {25'b0, bias_err, cfg_err, w_err, res_ready, ovf, err, busy | in_valid | loading};
                 5'h03: rd_misc <= w_data;
                 5'h05: rd_misc <= a_vec[31:0];
                 5'h06: rd_misc <= a_vec[63:32];

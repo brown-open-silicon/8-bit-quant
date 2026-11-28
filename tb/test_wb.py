@@ -8,6 +8,8 @@
 5. full_model_wmem:  same network, weights staged in the SRAM buffer; bit-exact,
                      and fewer bus accesses than (2).
 6. sram_bitflip:     a flip inside the SRAM is caught when the tile streams in.
+7. ppcfg_tmr_flip:   a flip in one PP_CFG copy is outvoted, repaired, and reported.
+8. bias_parity:      a flip in a BIAS register is caught by parity until BIAS is rewritten.
 """
 import json
 import random
@@ -18,7 +20,8 @@ import cocotb.utils
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
 
-from npu_driver import BIAS, CTRL, ERR, ID, WMEM, Npu, PP_CFG, STATUS, W_DATA
+from npu_driver import (BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, Npu, PP_CFG,
+                        STATUS, W_DATA)
 
 VECTORS = Path(__file__).parent / "vectors"
 
@@ -132,3 +135,40 @@ async def bitflip_irq(dut):
     await npu.load_weights(w)                    # repair from a good copy
     await npu.write(CTRL, 1)
     assert await npu.read(STATUS) & ERR == 0 and dut.irq.value == 0
+
+
+@cocotb.test()
+async def ppcfg_tmr_flip(dut):
+    npu = await reset(dut)
+    cfg = 0x0115ABCD
+    await npu.write(PP_CFG, cfg)
+    await FallingEdge(dut.wb_clk_i)
+    dut.u_ppcfg.ub.r.value = cfg ^ (1 << 17)       # radiation flips one bit of one copy
+    await FallingEdge(dut.wb_clk_i)
+    assert await npu.read(PP_CFG) == cfg, "majority vote should hide a single flip"
+    assert int(dut.u_ppcfg.ub.r.value) == cfg, "flipped copy should be repaired from the vote"
+    st = await npu.read(STATUS)
+    assert st & ERR and st & CFG_ERR and not st & (W_ERR | BIAS_ERR), f"STATUS = {st:#x}"
+    assert dut.irq.value == 1
+    await npu.write(CTRL, 1)
+    assert await npu.read(STATUS) & (ERR | CFG_ERR) == 0, "CTRL should clear a repaired flip"
+
+
+@cocotb.test()
+async def bias_parity(dut):
+    npu = await reset(dut)
+    b = -(1 << 40) + 12345
+    for lane in range(16):
+        await npu.write(BIAS + 8 * lane, (b + lane) & 0xFFFFFFFF)
+        await npu.write(BIAS + 8 * lane + 4, ((b + lane) >> 32) & 0xFFFF)
+    assert await npu.read(STATUS) & ERR == 0, "clean BIAS flagged"
+    await FallingEdge(dut.wb_clk_i)
+    bit = 48 * 9 + 37                            # lane 9, high half
+    dut.bias.value = int(dut.bias.value) ^ (1 << bit)
+    st = await npu.read(STATUS)
+    assert st & ERR and st & BIAS_ERR and not st & (W_ERR | CFG_ERR), f"STATUS = {st:#x}"
+    await npu.write(CTRL, 1)
+    assert await npu.read(STATUS) & BIAS_ERR, "parity error must stay until BIAS is rewritten"
+    await npu.write(BIAS + 8 * 9 + 4, ((b + 9) >> 32) & 0xFFFF)   # firmware reloads the word
+    await npu.write(CTRL, 1)
+    assert await npu.read(STATUS) & (ERR | BIAS_ERR) == 0

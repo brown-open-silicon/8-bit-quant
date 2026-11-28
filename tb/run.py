@@ -20,10 +20,10 @@ TESTS = {
     "core_ternary":  (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
                        "postproc.sv", "core_ternary.sv"], "test_core"),
     "wb_npu":        (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
-                       "postproc.sv", "core_ternary.sv", "wb_npu.sv",
+                       "postproc.sv", "core_ternary.sv", "tmr_reg.sv", "wb_npu.sv",
                        "macros/sky130_sram_1kbyte_1rw1r_32x256_8.v"], "test_wb"),
     "firmware":      (["pe_ws_ternary.sv", "array_ternary.sv", "accum_buf.sv",
-                       "postproc.sv", "core_ternary.sv", "wb_npu.sv",
+                       "postproc.sv", "core_ternary.sv", "tmr_reg.sv", "wb_npu.sv",
                        "macros/sky130_sram_1kbyte_1rw1r_32x256_8.v"], "test_firmware", "wb_npu"),
     "postproc":      (["postproc.sv"], "test_postproc"),              # P=1 (default)
     "postproc_p4":   (["postproc.sv"], "test_postproc", "postproc", {"P": 4}),
