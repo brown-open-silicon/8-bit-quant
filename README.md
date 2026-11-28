@@ -26,9 +26,11 @@ and is built to tolerate radiation-style bit flips. Brown Open Silicon.
 | C firmware for Caravel's RISC-V CPU | done, tested against the RTL |
 | Place and route to GDS (LibreLane, Sky130) | done: 1.79 x 1.81 mm, 180k cells + 1 KB SRAM |
 | Timing, 40 MHz typical corner | met (+6.9 ns) |
-| Timing, 40 MHz slow corner (ss, 100 C, 1.6 V) | **fails** (-8.7 ns setup, small hold misses) |
+| Timing, 40 MHz slow corner (ss, 100 C, 1.6 V) | nearly met on the reference branch: -0.8 ns nom_ss, +0.27 ns min_ss (r6); see [progress](docs/progress.md) |
+| Radiation hardening | TMR on config, row tags and bus handshake; parity on weight SRAM, BIAS, accumulator, bus address; upset counters. Fault injection: 0.75% silent errors, 0 hangs ([radiation](docs/radiation.md)) |
 | Routing DRC / antenna | 16 / 0 |
-| DRC + LVS sign-off, Caravel wrapper, precheck | not started |
+| Caravel wrapper | RTL + cocotb test done (`rtl/user_project_wrapper.v`); hardening + precheck not started |
+| DRC + LVS sign-off, precheck | not started |
 | PVT sensor, custom SRAM (other teams) | in design, see [interfaces](docs/interfaces.md); ring oscillator simulated ([analog/ring_osc](analog/ring_osc/README.md)) |
 
 ![Routed layout, colored by block](docs/img/layout_blocks.png)
