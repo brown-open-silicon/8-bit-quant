@@ -24,7 +24,9 @@
 //                            sky130_sram_1kbyte_1rw1r_32x256_8): port 0 = bus,
 //                            port 1 = array.
 //
-// Every access takes 2 cycles (request registered first); WMEM reads take 3.
+// Every access takes 2 cycles (request registered first). Register reads,
+// WMEM reads and BIAS writes take 3 (an extra cycle keeps the slow-corner
+// timing paths short, issue #6).
 //
 // Flow control (the bus waits instead of the CPU polling):
 //   - W_TILE waits until in-flight results have left the array (weights are
@@ -70,6 +72,7 @@ module wb_npu #(
     logic        we_q;
     logic [3:0]  sel_q;
     logic        req, wr, mem_sel, stall, mem_pend, bias_pend; // mem_pend = a WMEM read is waiting for the SRAM to answer
+    logic        rd_reg, rd_pend;         // register read: partial muxes in cycle 2, final mux + ack in cycle 3
     logic [6:0] widx;                     // register word index, byte offset [8:2]
     logic       busy, loading;
     logic       in_valid;
@@ -83,13 +86,14 @@ module wb_npu #(
     // Issue #6: a BIAS write (widx 0x40..0x5F). Just a range check, cheap.
     logic bias_wr;
     assign bias_wr = wr && widx >= 7'h40 && widx < 7'h40 + 2 * N;
+    assign rd_reg  = req && !we_q && !mem_sel;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wbs_ack_o <= 1'b0; mem_pend <= 1'b0; act <= 1'b0;
+            wbs_ack_o <= 1'b0; mem_pend <= 1'b0; rd_pend <= 1'b0; act <= 1'b0;
             adr_q <= '0; dat_q <= '0; we_q <= 1'b0; sel_q <= '0;
         end else begin
-            if (wbs_stb_i && wbs_cyc_i && !act && !wbs_ack_o && !mem_pend && !bias_pend) begin
+            if (wbs_stb_i && wbs_cyc_i && !act && !wbs_ack_o && !mem_pend && !bias_pend && !rd_pend) begin
                 // Issue #6: !bias_pend added so that we bloc capture of a second BIAS write
                 act <= 1'b1;
                 adr_q <= wbs_adr_i; dat_q <= wbs_dat_i; we_q <= wbs_we_i; sel_q <= wbs_sel_i;
@@ -97,8 +101,10 @@ module wb_npu #(
                 act <= 1'b0;
             end
             mem_pend  <= req && mem_sel && !we_q;   // SRAM read: data next cycle
-            // Issue #6: BIAS writes don't ack in cycle 2; they ack in cycle 3 (bias_pend)
-            wbs_ack_o <= (req && !(mem_sel && !we_q) && !bias_wr) || mem_pend || bias_pend;
+            rd_pend   <= rd_reg;                    // register read: final mux next cycle
+            // Issue #6: writes ack in cycle 2, except BIAS writes (cycle 3, bias_pend).
+            // All reads ack in cycle 3 (mem_pend / rd_pend).
+            wbs_ack_o <= (req && we_q && !bias_wr) || mem_pend || bias_pend || rd_pend;
         end
     end
 
@@ -159,15 +165,16 @@ module wb_npu #(
 
     // Issue #6: BIAS write saved in cycle 2, done in cycle 3
     localparam int LW = $clog2(N);
-    logic [LW-1:0]      bias_lane; // which lane (0..15) = widx[4:1] for 0x40..0x5F
-    logic               bias_hi;   // which half: 0 = bits [31:0], 1 = bits [47:32]
+    // one enable flop per BIAS half-word: bit 2n = lane n low, bit 2n+1 = lane n high.
+    // One-hot, so cycle 3 needs no decoder at all (each flop drives its slot directly).
+    logic [2*N-1:0]     bias_en;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             w_data <= '0; a_vec <= '0; pp_cfg <= '0; bias <= '0;
             {w_load, in_valid, rd_en, err_clear} <= '0;
             {w_row, in_addr, rd_addr, in_first} <= '0;
-            bias_pend <= 1'b0; bias_lane <= '0; bias_hi <= 1'b0;
+            bias_pend <= 1'b0; bias_en <= '0;
         end else begin
             {w_load, in_valid, rd_en, err_clear} <= '0;
             if (wr) begin
@@ -184,18 +191,20 @@ module wb_npu #(
                     default: ;
                 endcase
             end
-            // cycle 2: just save lane + half into flops (no 768-FF steering yet)
+            // cycle 2: decode which half-word into one-hot enable flops
             if (bias_wr) begin
                 bias_pend <= 1'b1;
-                bias_lane <= widx[LW:1];
-                bias_hi   <= widx[0];
+                bias_en   <= (2*N)'(1) << widx[LW:0];
             end
             // cycle 3: write from the saved flops. dat_q is still valid because
             // capture is blocked while bias_pend is set.
             if (bias_pend) begin
-                if (!bias_hi) bias[B_W*bias_lane +: 32]      <= dat_q;
-                else          bias[B_W*bias_lane + 32 +: 16] <= dat_q[15:0];
+                for (int l = 0; l < N; l++) begin
+                    if (bias_en[2*l])     bias[B_W*l +: 32]      <= dat_q;
+                    if (bias_en[2*l + 1]) bias[B_W*l + 32 +: 16] <= dat_q[15:0];
+                end
                 bias_pend <= 1'b0;
+                bias_en   <= '0;
             end
         end
     end
@@ -234,24 +243,62 @@ module wb_npu #(
         end
     end
 
-    // ---- read mux
+    // ---- read mux (issue #6: split over 2 cycles)
+    // cycle 2: three smaller muxes, each from flops, into rd_misc / rd_wide / rd_bias
+    // cycle 3: pick one of the three (rd_grp) into wbs_dat_o, with the ack
+    // Before, one giant mux (~1,400 inputs) sat between adr_q and wbs_dat_o.
+    logic [31:0] bias_lo  [N];            // per-lane views, so the muxes index cleanly
+    logic [15:0] bias_hi16[N];
+    logic [31:0] wide_w   [N];
+    genvar gl;
+    generate
+        for (gl = 0; gl < N; gl++) begin : g_rdview
+            assign bias_lo[gl]   = bias[B_W*gl +: 32];
+            assign bias_hi16[gl] = bias[B_W*gl + 32 +: 16];
+            assign wide_w[gl]    = wide_res[32*gl +: 32];
+        end
+    endgenerate
+
+    logic [31:0] rd_misc, rd_wide, rd_bias;
+    logic [1:0]  rd_grp;                  // widx[6:5]: 0 = 0x00-0x1F, 1 = WIDE, 2 = BIAS, 3 = none
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rd_misc <= '0; rd_wide <= '0; rd_bias <= '0; rd_grp <= '0;
+        end else if (rd_reg) begin
+            rd_grp <= widx[6:5];
+            case (widx[4:0])
+                5'h00: rd_misc <= ID;
+                // busy also covers a PUSH accepted this cycle that hasn't entered the pipe yet
+                5'h01: rd_misc <= {28'b0, res_ready, ovf, err, busy | in_valid | loading};
+                5'h03: rd_misc <= w_data;
+                5'h05: rd_misc <= a_vec[31:0];
+                5'h06: rd_misc <= a_vec[63:32];
+                5'h07: rd_misc <= a_vec[95:64];
+                5'h08: rd_misc <= a_vec[127:96];
+                5'h0A: rd_misc <= pp_cfg;
+                5'h10: rd_misc <= q_res[31:0];
+                5'h11: rd_misc <= q_res[63:32];
+                5'h12: rd_misc <= q_res[95:64];
+                5'h13: rd_misc <= q_res[127:96];
+                default: rd_misc <= '0;
+            endcase
+            rd_wide <= (widx[4:0] < N) ? wide_w[widx[LW-1:0]] : '0;
+            rd_bias <= (widx[4:0] < 2 * N)
+                     ? (widx[0] ? {16'b0, bias_hi16[widx[LW:1]]} : bias_lo[widx[LW:1]])
+                     : '0;
+        end
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) wbs_dat_o <= '0;
         else if (mem_pend) wbs_dat_o <= mem_dout0;
-        else if (req && !we_q && !mem_sel) begin
-            wbs_dat_o <= '0;
-            if      (widx == 7'h00) wbs_dat_o <= ID;
-            // busy also covers a PUSH accepted this cycle that hasn't entered the pipe yet
-            else if (widx == 7'h01) wbs_dat_o <= {28'b0, res_ready, ovf, err, busy | in_valid | loading};
-            else if (widx == 7'h03) wbs_dat_o <= w_data;
-            else if (widx >= 7'h05 && widx <= 7'h08) wbs_dat_o <= a_vec[32*(widx-7'h05) +: 32];
-            else if (widx == 7'h0A) wbs_dat_o <= pp_cfg;
-            else if (widx >= 7'h10 && widx <= 7'h13) wbs_dat_o <= q_res[32*(widx-7'h10) +: 32];
-            else if (widx >= 7'h20 && widx < 7'h20 + N) wbs_dat_o <= wide_res[32*(widx-7'h20) +: 32];
-            else if (widx >= 7'h40 && widx < 7'h40 + 2 * N) begin
-                if (!widx[0]) wbs_dat_o <= bias[B_W*((widx-7'h40)>>1) +: 32];
-                else          wbs_dat_o <= {16'b0, bias[B_W*((widx-7'h40)>>1) + 32 +: 16]};
-            end
+        else if (rd_pend) begin
+            case (rd_grp)
+                2'd0:    wbs_dat_o <= rd_misc;
+                2'd1:    wbs_dat_o <= rd_wide;
+                2'd2:    wbs_dat_o <= rd_bias;
+                default: wbs_dat_o <= '0;
+            endcase
         end
     end
 endmodule
