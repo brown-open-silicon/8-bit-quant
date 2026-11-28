@@ -50,7 +50,7 @@ Weight encoding (2 bits): `00` = 0, `01` = +1, `10` = -1, `11` = invalid (bit-fl
 | Offset | Name | R/W | Meaning |
 |---|---|---|---|
 | 0x000 | ID | R | `0x4E505531` ("NPU1") |
-| 0x004 | STATUS | R | [0] busy [1] bit-flip error [2] overflow [3] result ready |
+| 0x004 | STATUS | R | [0] busy [1] any bit-flip error [2] overflow [3] result ready [4] weight code 11 [5] PP_CFG copy flip (TMR-repaired) [6] BIAS parity |
 | 0x008 | CTRL | W | [0] clear error/overflow |
 | 0x00C | W_DATA | RW | one weight row: 16 x 2-bit, lane n = bits [2n+1:2n] |
 | 0x010 | W_LOAD | W | k: load W_DATA into array row k |
@@ -117,3 +117,5 @@ Flow settings that matter: `CTS_APPLY_NDR: none` (pin access), SRAM black box wi
 - **Weights in SRAM:** one row of 16 x 2 bits is exactly one 32-bit word, so the SRAM is a natural fit.
   Flip-flops for the same 1 KB measured 0.37 mm^2 vs 0.19 mm^2.
 - **Inference only:** training happens in Python, and the chip only runs the finished model.
+
+Radiation: see [radiation.md](radiation.md) for the per-block threat table and build order.

@@ -1,0 +1,78 @@
+# Radiation plan
+
+What radiation can do to this chip, which blocks it hits, and what we add to catch or fix it.
+Every protection feature (ECC, TMR, counters, fault-injection tests) should trace back to a row here.
+
+## What can go wrong
+
+| Effect | What it is | What it does to us |
+|---|---|---|
+| **SEU** (single-event upset) | A particle hits a flip-flop or SRAM cell and flips one stored bit. | Wrong weight, wrong bias, wrong partial sum, or a stuck state machine. The main threat. |
+| **SET** (single-event transient) | A particle makes a short glitch on a logic wire. It only matters if a flip-flop captures the glitch on a clock edge. | Same as an SEU, but rarer: the glitch has to land in the capture window. At 40 MHz the chance is small. |
+| **SEFI** (single-event functional interrupt) | An upset in control logic puts the whole block in a bad mode. | The bus never acks, the tile loader runs forever, `busy` never drops. The CPU hangs. |
+| **TID** (total ionizing dose) | Damage that builds up over months. Transistors get slower and leak more. | Paths that barely met timing start failing. Same effect as the slow corner (issue #6). |
+| **SEL** (single-event latch-up) | A particle turns on a parasitic thyristor between power and ground. | Large current, possibly permanent damage. Only fix: cut power fast. |
+
+## Block by block
+
+FF = flip-flop. Area numbers are rough, for Sky130 `sky130_fd_sc_hd`. Each FF is about 25 um^2 of cell area,
+or about 55 um^2 after placement at our ~45% utilization. "Lifetime" is how long a value sits before it's overwritten,
+which is how long a flip can do damage.
+
+| Block | Bits | Lifetime | If one bit flips | Severity | Protection | Status | Extra area |
+|---|---|---|---|---|---|---|---|
+| Weight SRAM (WMEM) | 8,192 | whole layer, or longer | one weight wrong for every image until reload. A flip into code `11` is caught (2 of the 6 possible single flips) | **high** (silent, long-lived) | parity per 32-bit word, checked on bus read and tile stream. Firmware reloads the tile | planned (rank 1) | 256 FFs + XOR trees, about 0.02 mm^2 |
+| PE weight registers | 512 | one K-tile (reloaded every tile) | one weight wrong until the next tile. `11` is caught | medium | already scrubbed by the per-tile reload. `11` detection | done | 0 |
+| Row-tag delay line (`tag_sr`) | 155 | 31 cycles | a result is added into the **wrong accumulator row**, or starts a fresh sum | **high** (silent) | TMR | planned (rank 2) | +310 FFs + voters, about 0.02 mm^2 |
+| Control state (`act`, `*_pend`, `ld_run`/`ld_k`, postproc `run`/`g`) | about 40 | always live | bus hangs or skips an access (SEFI) | **high** (hangs the CPU) | TMR on state FFs, plus a CPU-side timeout or watchdog in firmware | planned (rank 3) | +80 FFs, about 0.005 mm^2 |
+| Accumulator (`accum_buf`) | 8,192 | one layer | one output neuron wrong for one image | medium (transient) | none in hardware: TMR would be about +0.8 mm^2. Optional firmware re-run-and-compare for critical inputs | firmware option | 0 |
+| BIAS | 768 | one 16-output group | every image in that group off by a constant | medium | parity per half-word, sticky `STATUS[6]`. Firmware rewrites BIAS (it does every group anyway) | **done** (#10) | 32 FFs + XOR, about 0.01 mm^2 |
+| PP_CFG (m, shift, relu) | 32 | whole layer | every output of the layer wrong | **high** (one bit ruins everything) | TMR with self-repair, sticky `STATUS[5]` | **done** (#10) | +64 FFs + voters, about 0.004 mm^2 |
+| Postproc pipeline, results (`q_res`, `wide_res`) | about 900 | a few cycles until the CPU reads | one output wrong once | low | none | — | 0 |
+| Bus capture regs (`adr_q`, `dat_q`) | about 70 | one access | one access goes to the wrong place or carries a wrong value | low to medium | none (TMR here would sit on the timing-critical decode) | — | 0 |
+| Clock / reset tree | — | — | glitch resets the NPU or double-clocks | medium | Caravel's problem; the CPU re-inits on reset | — | — |
+
+What we already have:
+- **Weight code `11` = error.** The chip treats it as 0 and sets `STATUS[4]`.
+- **Overflow flag.**
+- **`irq` output.** It fires on any error or overflow.
+- **`STATUS[1]`.** It's the OR of every error source, so old firmware still works. Bits 4–6 say which source it was.
+
+### TID and SEL
+
+- **TID:** we can't fix the transistors, only leave margin. Meeting timing at the slow corner (#6) is the TID margin. The ring-oscillator PVT sensor (`analog/ring_osc`) can measure slowdown in flight, and firmware can then drop the clock.
+- **SEL:** Sky130 standard cells already have tap cells (well contacts) at the required spacing. That's the main on-die defense. A real mission adds a current monitor and power switch on the board. That's outside this chip.
+
+## Measured so far
+
+From `make quant`: 784-128-10 MNIST, random flips in stored weights only, 5 trials.
+
+| Weights | Clean | 1% of weight bits flipped |
+|---|---|---|
+| int8 | 96.6% | 92.6% |
+| ternary, quantization-aware | 96.7% | 96.4% |
+
+Ternary weights already degrade gracefully: a flip moves a weight by at most 1 step, or into the detected `11` code.
+**This only models weight flips.** The PP_CFG and tag rows in the table above are worse: one bit there breaks every output.
+That's why they go first, even though they hold far fewer bits.
+
+## Build order
+
+Each item can be its own issue.
+
+1. **WMEM word parity:**
+   - Hardware: 256 parity bits in flip-flops (the stock SRAM is exactly 32 bits wide, so there's no spare column). Check on every port-1 tile read and port-0 bus read. Sticky `STATUS[7]`.
+   - Firmware: re-send that tile.
+   - Test: flip a bit in the SRAM model (like `test_wb.sram_bitflip`, but a `00`→`01` flip that the `11` code misses).
+2. **TMR the row-tag delay line.** Test: flip one copy mid-stream; results must still match.
+3. **TMR the control state, plus a firmware timeout.**
+   - Hardware: TMR on `act`, `mem_pend`, `bias_pend`, `rd_pend`, `ld_run`, `ld_k`, and the postproc counters.
+   - Firmware: give up on `busy` after N polls and reset the NPU.
+4. **Error counter register:** a saturating count of each error type, for telemetry. "How many flips per day in orbit" is the number the mission team actually wants.
+5. **Fault-injection regression:**
+   - A cocotb test that flips a random FF anywhere in `wb_npu` during a full MNIST run.
+   - It checks that the result is either still correct or flagged in `STATUS`.
+   - The fraction that's neither is our *silent data corruption* rate, the headline radiation number.
+6. **Optional firmware re-run-and-compare** for the accumulator: costs time, not area.
+
+Done: PP_CFG TMR, BIAS parity, per-source STATUS bits (#10).
