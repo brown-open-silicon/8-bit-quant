@@ -58,7 +58,8 @@ module core_ternary #(
     input  logic                  err_clear,
     output logic                  err,        // bit-flipped weight seen (code 11)
     output logic                  ovf,        // accumulator overflow
-    output logic                  tag_err     // pulse: TMR repaired a flipped row tag
+    output logic                  tag_err,    // pulse: TMR repaired a flipped row tag
+    output logic                  acc_perr    // pulse: accumulator word failed parity
 );
     logic                  arr_valid;
     logic [PSUM_W*N-1:0]   arr_c;
@@ -106,7 +107,8 @@ module core_ternary #(
         .in_vec   (arr_c),
         .rd_en, .rd_addr, .rd_valid, .rd_vec, .busy (acc_busy),
         .ovf_clear(err_clear),
-        .ovf
+        .ovf,
+        .perr     (acc_perr)
     );
 
     postproc #(.N(N), .ACC_W(ACC_W), .B_W(B_W)) u_pp (

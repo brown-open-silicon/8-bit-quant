@@ -25,7 +25,8 @@ enum { NPU_BUSY = 1, NPU_ERR = 2, NPU_OVF = 4, NPU_READY = 8,
        NPU_CFG_ERR = 32,    // PP_CFG copy flipped; TMR already repaired it
        NPU_BIAS_ERR = 64,   // BIAS parity error: rewrite BIAS, then clear
        NPU_WMEM_ERR = 128,  // weight SRAM parity error: re-send the tile, then clear
-       NPU_TAG_ERR = 256 }; // row-tag copy flipped; TMR already repaired it
+       NPU_TAG_ERR = 256,   // row-tag copy flipped; TMR already repaired it
+       NPU_ACC_ERR = 512 }; // accumulator parity error: re-run the layer
 // Not a hardware bit: npu_dense() ORs this in if the NPU stopped answering
 // (busy or not-ready for NPU_POLL_MAX polls). Reset the NPU and retry.
 #define NPU_FW_TIMEOUT 0x80000000u

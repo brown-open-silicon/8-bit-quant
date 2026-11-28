@@ -7,6 +7,8 @@
 3. tag_tmr_flip:     radiation flips one copy of a row tag while it's in flight;
                      TMR must outvote it (results still exact) and pulse tag_err.
 (Overflow is tested on accum_buf alone with a narrow ACC_W: tb/test_accum.py.)
+4. acc_parity:       a flipped accumulator word is caught by parity, both when the
+                     next K-tile adds to it and when the row is read out.
 """
 import json
 import random
@@ -241,3 +243,47 @@ async def tag_tmr_flip(dut):
     got = await read_rows(dut, addrs)
     assert got == ref_layer(tiles, len(addrs)), "a single flipped tag copy changed the results"
     assert seen, "tag_err never pulsed"
+
+
+@cocotb.test()
+async def acc_parity(dut):
+    await reset(dut)
+    rng = random.Random(31)
+    addrs = list(range(4))
+    tiles = [([[rng.choice([0b00, 0b01, 0b10]) for _ in range(N)] for _ in range(N)],
+              [[rng.randint(-128, 127) for _ in range(N)] for _ in range(len(addrs))])
+             for _ in range(2)]
+    seen = []
+
+    async def watch():
+        while True:
+            await RisingEdge(dut.clk)
+            if dut.acc_perr.value == 1:
+                seen.append(1)
+    cocotb.start_soon(watch())
+    mem = dut.u_acc.mem
+
+    # clean run: no parity errors
+    await load_weights(dut, tiles[0][0])
+    await stream_tile(dut, tiles[0][1], addrs, first=True)
+    await load_weights(dut, tiles[1][0])
+    await stream_tile(dut, tiles[1][1], addrs, first=False)
+    assert await read_rows(dut, addrs) == ref_layer(tiles, len(addrs))
+    assert not seen, "clean run raised acc_perr"
+
+    # flip row 2, lane 5 between tiles: caught when tile 2 accumulates onto it
+    await load_weights(dut, tiles[0][0])
+    await stream_tile(dut, tiles[0][1], addrs, first=True)
+    w = mem[2 * N + 5]
+    w.value = int(w.value) ^ (1 << 9)
+    await load_weights(dut, tiles[1][0])
+    await stream_tile(dut, tiles[1][1], addrs, first=False)
+    assert seen, "flip before accumulation not caught"
+
+    # flip after the last tile: caught on the read port
+    seen.clear()
+    w = mem[1 * N + 11]
+    w.value = int(w.value) ^ (1 << 30)
+    await read_rows(dut, addrs)
+    await FallingEdge(dut.clk)
+    assert seen, "flip before readout not caught"

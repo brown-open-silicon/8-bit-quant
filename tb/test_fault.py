@@ -52,7 +52,7 @@ def sites():
                     ("w_row", 4), ("in_addr", 4), ("rd_addr", 4), ("in_first", 1),
                     ("rd_misc", 32), ("rd_wide", 32), ("rd_bias", 32), ("rd_grp", 2),
                     ("res_ready", 1), ("cfg_err", 1), ("bias_err", 1), ("wmem_err", 1),
-                    ("tag_err", 1)]:
+                    ("tag_err", 1), ("acc_err", 1)]:
         add("bus/ctrl", name, w)
     for name, w in [("w_data", 32), ("a_vec", 128), ("q_res", 128), ("wide_res", 512)]:
         add("data regs", name, w)
@@ -79,9 +79,13 @@ def sites():
     add("PE pipeline", "u_core.u_array.vsr", LAT)
     add("bus/ctrl", "u_core.u_array.err", 1)
     add("accumulator", "u_core.u_acc.mem", 32, 16 * N)   # [DEPTH][N], flattened by the simulator
+    add("accumulator", "u_core.u_acc.par", N, 16)
+    add("accumulator", "u_core.u_acc.rd_par", N)
+    add("accumulator", "u_core.u_acc.chk1", 1)
     for n in range(N):
         add("accumulator", f"u_core.u_acc.g_lane[{n}].x1", 32)
         add("accumulator", f"u_core.u_acc.g_lane[{n}].base1", 32)
+        add("accumulator", f"u_core.u_acc.g_lane[{n}].bpar1", 1)
     for name, w in [("v1", 1), ("a1", 4), ("rd_vec", 512), ("rd_valid", 1), ("ovf", 1)]:
         add("accumulator", f"u_core.u_acc.{name}", w)
     for name, w in [("acc_q", 512), ("g", 4), ("g0", 4), ("g1", 4), ("g2", 4), ("run", 1),

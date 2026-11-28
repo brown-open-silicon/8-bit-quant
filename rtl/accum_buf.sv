@@ -17,6 +17,12 @@
 //
 // Read port has 1-cycle latency. ovf is a sticky flag set if any lane's
 // signed add overflows ACC_W bits.
+//
+// Radiation: one parity bit per stored word (docs/radiation.md). The fault
+// campaign showed the accumulator caused most silent errors. Parity is written
+// with every sum and checked when a word is read back, both for accumulation
+// (stage 2, before a flipped value can be summed into fresh parity) and on the
+// read port. perr pulses on a mismatch.
 module accum_buf #(
     parameter int N      = 16,
     parameter int IN_W   = 16,
@@ -39,10 +45,14 @@ module accum_buf #(
     output logic                  busy,       // an accumulate is still in the pipeline
     // status
     input  logic                  ovf_clear,
-    output logic                  ovf
+    output logic                  ovf,
+    output logic                  perr        // pulse: a stored word failed parity
 );
     logic signed [ACC_W-1:0] mem [DEPTH][N];
-    logic [N-1:0] lane_ovf;
+    logic [N-1:0]            par [DEPTH];    // even parity of mem[r][n] in par[r][n]
+    logic [N-1:0] lane_ovf, lane_perr1, lane_perr_rd;
+    logic [N-1:0] rd_par;
+    logic         chk1;                      // stage-2 operand came from mem (check it)
 
     // stage-1 registers (shared by all lanes)
     logic          v1;
@@ -51,36 +61,42 @@ module accum_buf #(
     assign fwd  = v1 && (a1 == in_addr) && !in_first;
     assign busy = v1;
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin v1 <= 1'b0; a1 <= '0; end
-        else begin        v1 <= in_valid; a1 <= in_addr; end
+        if (!rst_n) begin v1 <= 1'b0; a1 <= '0; chk1 <= 1'b0; end
+        else begin        v1 <= in_valid; a1 <= in_addr; chk1 <= in_valid && !in_first && !fwd; end
     end
 
     genvar n;
     generate
         for (n = 0; n < N; n++) begin : g_lane
             logic signed [ACC_W-1:0] x1, base1, sum;
+            logic                    bpar1;      // stored parity of base1
             // stage 1
             always_ff @(posedge clk) begin
                 if (in_valid) begin
                     x1    <= ACC_W'($signed(in_vec[IN_W*n +: IN_W]));
                     base1 <= in_first ? '0 : (fwd ? sum : mem[in_addr][n]);
+                    bpar1 <= par[in_addr][n];
                 end
             end
+            assign lane_perr1[n] = v1 && chk1 && ((^base1) != bpar1);
             // stage 2
             assign sum = base1 + x1;
             // signed overflow: operands same sign, result different sign
             assign lane_ovf[n] = v1 && (base1[ACC_W-1] == x1[ACC_W-1])
                                     && (sum[ACC_W-1]   != x1[ACC_W-1]);
             always_ff @(posedge clk) begin
-                if (v1) mem[a1][n] <= sum;
+                if (v1) begin mem[a1][n] <= sum; par[a1][n] <= ^sum; end
             end
 
             always_ff @(posedge clk or negedge rst_n) begin
-                if (!rst_n)     rd_vec[ACC_W*n +: ACC_W] <= '0;
-                else if (rd_en) rd_vec[ACC_W*n +: ACC_W] <= mem[rd_addr][n];
+                if (!rst_n)     begin rd_vec[ACC_W*n +: ACC_W] <= '0; rd_par[n] <= 1'b0; end
+                else if (rd_en) begin rd_vec[ACC_W*n +: ACC_W] <= mem[rd_addr][n]; rd_par[n] <= par[rd_addr][n]; end
             end
+            assign lane_perr_rd[n] = rd_valid && ((^rd_vec[ACC_W*n +: ACC_W]) != rd_par[n]);
         end
     endgenerate
+
+    assign perr = |lane_perr1 | |lane_perr_rd;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
