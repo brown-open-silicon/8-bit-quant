@@ -9,7 +9,7 @@
 //   0x004  STATUS    R       [0] busy  [1] err (any bit flip seen)  [2] ovf  [3] result ready
 //                            [4] weight flip (code 11)  [5] PP_CFG copy flip (TMR, repaired)
 //                            [6] BIAS parity error (reload BIAS)  [7] WMEM parity error (re-send tile)
-//                            [8] row-tag copy flip (TMR, repaired)  [9] accumulator parity (re-run the layer)
+//                            [8] row-tag or bus-handshake copy flip (TMR, repaired)  [9] accumulator parity (re-run the layer)
 //   0x008  CTRL      W       [0] clear err/ovf (a BIAS parity error stays until BIAS is rewritten)
 //                            [1] clear ERRCNT
 //   0x00C  W_DATA    RW      one weight row: 16 x 2-bit codes, lane n = bits [2n+1:2n]
@@ -97,7 +97,7 @@ module wb_npu #(
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wbs_ack_o <= 1'b0; mem_pend <= 1'b0; rd_pend <= 1'b0; act <= 1'b0;
+            act <= 1'b0;
             adr_q <= '0; dat_q <= '0; we_q <= 1'b0; sel_q <= '0;
         end else begin
             if (wbs_stb_i && wbs_cyc_i && !act && !wbs_ack_o && !mem_pend && !bias_pend && !rd_pend) begin
@@ -107,17 +107,25 @@ module wb_npu #(
             end else if (req) begin
                 act <= 1'b0;
             end
-            mem_pend  <= req && mem_sel && !we_q;   // SRAM read: data next cycle
-            rd_pend   <= rd_reg;                    // register read: final mux next cycle
-            // Issue #6: writes ack in cycle 2, except BIAS writes (cycle 3, bias_pend).
-            // All reads ack in cycle 3 (mem_pend / rd_pend).
-            // Only ack while the master is actually holding stb/cyc (Wishbone rule). A
-            // flipped *_pend bit could otherwise ack between transfers and put the CPU
-            // one ack ahead of the NPU (seen in the fault campaign as a hang).
-            wbs_ack_o <= wbs_stb_i && wbs_cyc_i &&
-                         ((req && we_q && !bias_wr) || mem_pend || bias_pend || rd_pend);
         end
     end
+
+    // ---- handshake state on TMR. mem_pend / rd_pend / bias_pend are each a 1-cycle
+    // delay of a decode signal, and ack follows from them. The fault campaign showed a
+    // single flip here acks a request early with garbage data, which leaves the CPU
+    // one ack out of step with the NPU. 3 copies + vote: a single flip is outvoted.
+    //   writes ack in cycle 2, except BIAS writes (cycle 3, bias_pend);
+    //   all reads ack in cycle 3 (mem_pend / rd_pend);
+    //   ack only while the master holds stb/cyc (Wishbone rule).
+    logic [3:0] hs_d, hs_q;
+    logic       hs_err;
+    assign hs_d = {wbs_stb_i && wbs_cyc_i &&
+                   ((req && we_q && !bias_wr) || mem_pend || bias_pend || rd_pend),   // ack
+                   bias_wr,                      // bias_pend: BIAS write runs next cycle
+                   rd_reg,                       // rd_pend:   final read mux next cycle
+                   req && mem_sel && !we_q};     // mem_pend:  SRAM read data next cycle
+    tmr_reg #(.W(4)) u_hs (.clk, .rst_n, .we (1'b1), .d (hs_d), .q (hs_q), .err (hs_err));
+    assign {wbs_ack_o, bias_pend, rd_pend, mem_pend} = hs_q;
 
     // ---- weight buffer: stock Sky130 1 KB SRAM
     //   port 0 (RW): the bus.  port 1 (R): streams a tile into the array.
@@ -227,7 +235,7 @@ module wb_npu #(
             w_data <= '0; a_vec <= '0; bias <= '0; bias_par <= '0;
             {w_load, in_valid, rd_en, err_clear, cnt_clear} <= '0;
             {w_row, in_addr, rd_addr, in_first} <= '0;
-            bias_pend <= 1'b0; bias_en <= '0;
+            bias_en <= '0;
         end else begin
             {w_load, in_valid, rd_en, err_clear, cnt_clear} <= '0;
             if (wr) begin
@@ -244,10 +252,7 @@ module wb_npu #(
                 endcase
             end
             // cycle 2: decode which half-word into one-hot enable flops
-            if (bias_wr) begin
-                bias_pend <= 1'b1;
-                bias_en   <= (2*N)'(1) << widx[LW:0];
-            end
+            if (bias_wr) bias_en <= (2*N)'(1) << widx[LW:0];   // bias_pend follows (u_hs)
             // cycle 3: write from the saved flops. dat_q is still valid because
             // capture is blocked while bias_pend is set.
             if (bias_pend) begin
@@ -255,7 +260,6 @@ module wb_npu #(
                     if (bias_en[2*l])     begin bias[B_W*l +: 32]      <= dat_q;       bias_par[2*l]     <= ^dat_q;       end
                     if (bias_en[2*l + 1]) begin bias[B_W*l + 32 +: 16] <= dat_q[15:0]; bias_par[2*l + 1] <= ^dat_q[15:0]; end
                 end
-                bias_pend <= 1'b0;
                 bias_en   <= '0;
             end
         end
@@ -291,7 +295,7 @@ module wb_npu #(
             cfg_err <= 1'b0; bias_err <= 1'b0; wmem_err <= 1'b0; tag_err <= 1'b0; acc_err <= 1'b0;
         end else begin
             wmem_err <= wmem_bad | (wmem_err & !err_clear);
-            tag_err  <= tag_tmr_err | (tag_err & !err_clear);
+            tag_err  <= tag_tmr_err | hs_err | (tag_err & !err_clear);
             acc_err  <= acc_perr | (acc_err & !err_clear);
             cfg_err  <= cfg_tmr_err | (cfg_err  & !err_clear);
             bias_err <= (|bias_bad) | (bias_err & !err_clear);
@@ -324,7 +328,7 @@ module wb_npu #(
     // stays high, like an unrepaired parity error, counts once), saturate at 255
     logic [31:0] errcnt;
     logic [3:0]  ev, ev_q;
-    assign ev = {tag_tmr_err, wmem_bad | (|bias_bad) | acc_perr, cfg_tmr_err, w_err};
+    assign ev = {tag_tmr_err | hs_err, wmem_bad | (|bias_bad) | acc_perr, cfg_tmr_err, w_err};
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             errcnt <= '0; ev_q <= '0;

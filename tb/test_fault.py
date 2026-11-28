@@ -10,6 +10,7 @@ copies. Each trial lands in one bucket:
   detected     wrong answer, flagged     (STATUS.err: firmware knows to retry)
   corrected    right answer, flagged     (TMR repaired it, or flag only)
   SDC          wrong answer, NO flag     (silent data corruption: the bad one)
+  desync       the CPU got an ack with garbage data (bus out of step; as bad as SDC)
   timeout      firmware's poll limit tripped (it knows: reset and retry)
   hang         the bus itself stopped answering
 
@@ -45,8 +46,8 @@ def sites():
                 s.append((f"{path}[{i}]", width, region))
     # bus + config registers (wb_npu)
     for name, w in [("adr_q", 32), ("dat_q", 32), ("we_q", 1), ("sel_q", 4), ("act", 1),
-                    ("mem_pend", 1), ("rd_pend", 1), ("bias_pend", 1), ("bias_en", 32),
-                    ("wbs_ack_o", 1), ("wbs_dat_o", 32), ("ld_run", 1), ("ld_v", 1),
+                    ("bias_en", 32),
+                    ("wbs_dat_o", 32), ("ld_run", 1), ("ld_v", 1),
                     ("ld_tile", 4), ("ld_k", 4), ("ld_kd", 4), ("wp_go", 1), ("wp_row", 8),
                     ("wp_mask", 4), ("wp_bits", 4), ("pexp0", 4), ("pexp1", 4),
                     ("w_load", 1), ("in_valid", 1), ("rd_en", 1), ("err_clear", 1),
@@ -61,6 +62,8 @@ def sites():
     add("BIAS", "bias_par", 32)
     for c in "abc":
         add("PP_CFG (TMR)", f"u_ppcfg.u{c}.r", 32)
+    for c in "abc":
+        add("bus/ctrl", f"u_hs.u{c}.r", 4)          # ack, bias_pend, rd_pend, mem_pend
     add("WMEM parity", "wpar", 4, 256)
     add("weight SRAM", "u_wmem.mem", 32, 256)
     # core
@@ -166,7 +169,7 @@ async def fault_campaign(dut):
     assert not bad, "unknown fault sites:\n" + "\n".join(bad[:20])
     weights = [w for _, w, _ in S]
     total_bits = sum(weights)
-    buckets = {k: 0 for k in ("masked", "detected", "corrected", "SDC", "timeout", "hang")}
+    buckets = {k: 0 for k in ("masked", "detected", "corrected", "SDC", "desync", "timeout", "hang")}
     by_region, log = {}, []
     for i in range(trials):
         path, width, region = rng.choices(S, weights=weights)[0]
@@ -187,6 +190,8 @@ async def fault_campaign(dut):
                  "detected" if flagged else "SDC")
         except NpuTimeout:
             b = "timeout"
+        except ValueError:                       # read data was X: bus out of step
+            b = "desync"
         except Exception:                        # cocotb.triggers.SimTimeoutError
             b = "hang"
         if strike.skipped:
@@ -195,7 +200,7 @@ async def fault_campaign(dut):
         r = by_region.setdefault(region, {k: 0 for k in buckets})
         r[b] += 1
         log.append({"path": path, "bit": bit, "cycle": when, "region": region, "result": b})
-        if b in ("SDC", "timeout", "hang"):
+        if b in ("SDC", "desync", "timeout", "hang"):
             dut._log.info(f"trial {i}: {b} after flipping {path} bit {bit} at cycle {when}")
 
     OUT.parent.mkdir(exist_ok=True)
