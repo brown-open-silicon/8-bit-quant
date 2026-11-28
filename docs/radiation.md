@@ -24,7 +24,7 @@ which is how long a flip can do damage.
 | Weight SRAM (WMEM) | 8,192 | whole layer, or longer | one weight wrong for every image until reload. A flip into code `11` is caught (2 of the 6 possible single flips) | **high** (silent, long-lived) | parity per SRAM byte (per byte so masked writes work), checked on bus read and tile stream, sticky `STATUS[7]`. Firmware re-sends the tile | **done** | 1,024 FFs + XOR trees, about 0.06 mm^2 |
 | PE weight registers | 512 | one K-tile (reloaded every tile) | one weight wrong until the next tile. `11` is caught | medium | already scrubbed by the per-tile reload. `11` detection | done | 0 |
 | Row-tag delay line (`tag_sr`) | 155 | 31 cycles | a result is added into the **wrong accumulator row**, or starts a fresh sum | **high** (silent) | TMR per stage (31 `tmr_reg`s, valid bits included), sticky `STATUS[8]` | **done** | +372 FFs + voters, about 0.025 mm^2 |
-| Control state (`act`, `*_pend`, `ld_run`/`ld_k`, postproc `run`/`g`) | about 40 | always live | an access is re-run or repeated (a hang was the worry; it re-captures instead) | medium | a flipped pending bit makes the request re-run (bus retry), not hang. Firmware poll timeouts | **done** (analysis + firmware) | 0 |
+| Control state (`act`, `*_pend`, `ld_run`/`ld_k`, postproc `run`/`g`) | about 40 | always live | an access is re-run or repeated (a hang was the worry; it re-captures instead) | medium | handshake bits on TMR (a single flip used to ack early with garbage). Ack only while stb/cyc. Firmware poll timeouts | **done** | +8 FFs + voters, under 0.001 mm^2 |
 | Accumulator (`accum_buf`) | 8,192 | one layer | one output neuron wrong for one image | **high** (the fault campaign's top source of silent errors) | parity per word, checked on accumulate and readout, sticky `STATUS[9]`. Firmware re-runs the layer | **done** | 256 FFs + XOR trees, about 0.02 mm^2 |
 | BIAS | 768 | one 16-output group | every image in that group off by a constant | medium | parity per half-word, sticky `STATUS[6]`. Firmware rewrites BIAS (it does every group anyway) | **done** (#10) | 32 FFs + XOR, about 0.01 mm^2 |
 | PP_CFG (m, shift, relu) | 32 | whole layer | every output of the layer wrong | **high** (one bit ruins everything) | TMR with self-repair, sticky `STATUS[5]` | **done** (#10) | +64 FFs + voters, about 0.004 mm^2 |
@@ -82,10 +82,14 @@ Each item can be its own issue.
    tile stream and bus reads, sticky `STATUS[7]`. Test: `test_wb.wmem_parity` (a `00`→`01` flip the `11` code misses).
    Note: after power-up the SRAM holds random data, so reading a word that was never written can flag a false error.
 2. ~~**TMR the row-tag delay line**~~: done, valid bits included. Test: `test_core.tag_tmr_flip`.
-3. ~~**Control state**~~: analyzed instead of TMR'd.
-   - **No hang:** if `act` or any `*_pend` flips 1→0 while the CPU waits, the CPU is still holding `stb`. The request is captured and executed again, so the bus doesn't hang.
-   - **Residual risk:** a command write (PUSH, W_LOAD, READ, W_TILE) running **twice**, or a flip 0→1 repeating the last access. That's silent corruption, not a hang. The fault-injection campaign (item 5) measures how often it happens. Fix it only if the number says so.
-   - **Firmware:** every poll loop gives up after `NPU_POLL_MAX` polls and returns `NPU_FW_TIMEOUT`.
+3. ~~**Control state**~~: done, after the fault campaign proved the first analysis incomplete.
+   - **What the first analysis got right:** a pending bit flipping 1→0 just re-runs the access, because the CPU still holds `stb`.
+   - **What it missed:** a 0→1 flip **acks a request early with garbage data**. The CPU is then one ack out of step with the NPU (found by the 2,000-trial campaign).
+   - **Fix:**
+     - The 4 handshake bits (`ack`, `mem_pend`, `rd_pend`, `bias_pend`) are on `tmr_reg`. Each is a 1-cycle delay of a decode signal, so TMR drops straight in.
+     - `ack` only fires while `stb`/`cyc` are held.
+     - Firmware poll loops give up after `NPU_POLL_MAX` polls and return `NPU_FW_TIMEOUT`.
+   - **Still unprotected:** `act` (a 0→1 flip repeats the last access). It feeds the timing-critical decode, so it stays single until the campaign says otherwise.
 4. ~~**Error counter register**~~: done, `ERRCNT` at 0x034 (`test_wb.errcnt`). a saturating count of each error type, for telemetry. "How many flips per day in orbit" is the number the mission team actually wants.
 5. **Fault-injection regression:**
    - A cocotb test that flips a random FF anywhere in `wb_npu` during a full MNIST run.
