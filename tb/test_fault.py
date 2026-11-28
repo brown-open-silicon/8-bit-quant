@@ -54,7 +54,7 @@ def sites():
                     ("w_row", 4), ("in_addr", 4), ("rd_addr", 4), ("in_first", 1),
                     ("rd_misc", 32), ("rd_wide", 32), ("rd_bias", 32), ("rd_grp", 2),
                     ("res_ready", 1), ("cfg_err", 1), ("bias_err", 1), ("wmem_err", 1),
-                    ("tag_err", 1), ("acc_err", 1)]:
+                    ("tag_err", 1), ("acc_err", 1), ("bus_err", 1), ("adr_par", 1)]:
         add("bus/ctrl", name, w)
     for name, w in [("w_data", 32), ("a_vec", 128), ("q_res", 128), ("wide_res", 512)]:
         add("data regs", name, w)

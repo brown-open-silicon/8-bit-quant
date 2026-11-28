@@ -29,7 +29,7 @@ which is how long a flip can do damage.
 | BIAS | 768 | one 16-output group | every image in that group off by a constant | medium | parity per half-word, sticky `STATUS[6]`. Firmware rewrites BIAS (it does every group anyway) | **done** (#10) | 32 FFs + XOR, about 0.01 mm^2 |
 | PP_CFG (m, shift, relu) | 32 | whole layer | every output of the layer wrong | **high** (one bit ruins everything) | TMR with self-repair, sticky `STATUS[5]` | **done** (#10) | +64 FFs + voters, about 0.004 mm^2 |
 | Postproc pipeline, results (`q_res`, `wide_res`) | about 900 | a few cycles until the CPU reads | one output wrong once | low | none | — | 0 |
-| Bus capture regs (`adr_q`, `dat_q`) | about 70 | one access | one access goes to the wrong place or carries a wrong value | low to medium | none (TMR here would sit on the timing-critical decode) | — | 0 |
+| Bus capture regs (`adr_q`, `dat_q`) | about 70 | one access | one access goes to the wrong place or carries a wrong value | medium (3 of the last 15 silent errors) | parity of {address, we} taken at the pins, checked at execute, `STATUS[10]`. `dat_q` is unprotected | **done** (address) | 1 FF + XOR tree |
 | Clock / reset tree | — | — | glitch resets the NPU or double-clocks | medium | Caravel's problem; the CPU re-inits on reset | — | — |
 
 What we already have:
@@ -65,6 +65,7 @@ uniform over every state bit in `wb_npu`. 1,000 trials per row, seed 1.
 |---|---|---|---|---|---|---|
 | PP_CFG TMR, BIAS + WMEM parity, tag TMR | 32,423 | 86.2% | 7.8% | 3.0% | **3.0%** | 0 |
 | + accumulator parity | 32,713 | 85.8% | 8.9% | 4.7% | **0.6%** | 0 |
+| + handshake TMR, ack gating, first-tile accumulator check (2,000 trials, seed 3) | 32,721 | 85.4% | 9.0% | 4.9% | **0.75%** | 0 (and 0 desync) |
 
 - **First row:** 23 of the 30 silent errors were accumulator words.
 - **Second row:** accumulator parity turned them into detections (18 detected, 14 corrected, 0 silent).
@@ -72,6 +73,11 @@ uniform over every state bit in `wb_npu`. 1,000 trials per row, seed 1.
   - 2 in the array's valid shift register. Since fixed: the accumulator now takes its valid from the TMR'd tag line.
   - 2 in PE partial sums and 1 in a PE weight (transient, in flight).
   - 1 in `wide_res` (a result waiting for the CPU).
+- **Third row, 15 silent errors left:**
+  - 10 in the PE array's moving data: partial sums and activations in flight, skew/deskew registers, 2 PE weights. Covering these needs algorithm-level checking (a checksum column), not a few flip-flops.
+  - 3 in the captured bus address (`adr_q`). Since fixed: a parity bit taken from the pins at capture, checked when the access runs, `STATUS[10]`.
+  - 1 in `a_vec`, 1 in `wide_res`.
+  - The first and third rows use different random draws; the second row used the same seed as the first.
 - **Corrected:** a flagged run with the right answer. That's a TMR repair, or a flip in a word that was rewritten before it mattered.
 
 ## Build order

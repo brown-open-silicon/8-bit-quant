@@ -14,6 +14,7 @@
                      byte parity on the tile stream and on a bus read; byte-masked writes
                      keep parity right.
 10. errcnt:          ERRCNT counts each kind of upset once per event, CTRL[1] clears it.
+11. adr_parity:      a flipped captured address bit is reported in STATUS[10].
 """
 import json
 import random
@@ -24,7 +25,7 @@ import cocotb.utils
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
 
-from npu_driver import (ERRCNT, BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, WMEM_ERR, Npu, PP_CFG,
+from npu_driver import (BUS_ERR, ERRCNT, BIAS, BIAS_ERR, CFG_ERR, CTRL, ERR, ID, W_ERR, WMEM, WMEM_ERR, Npu, PP_CFG,
                         STATUS, W_DATA)
 
 VECTORS = Path(__file__).parent / "vectors"
@@ -229,3 +230,21 @@ async def errcnt(dut):
     await npu.write(CTRL, 0b10)                  # clear counters only
     assert await npu.read(ERRCNT) == 0
     assert await npu.read(STATUS) & ERR, "CTRL[1] must not clear the error flags"
+
+
+@cocotb.test()
+async def adr_parity(dut):
+    npu = await reset(dut)
+    await npu.write(PP_CFG, 0x1234)
+    assert await npu.read(STATUS) & ERR == 0
+
+    async def strike():                          # flip adr_q right after capture
+        while dut.act.value != 1:                # mid-cycle 2: captured, not yet run
+            await FallingEdge(dut.wb_clk_i)
+        dut.adr_q.value = int(dut.adr_q.value) ^ (1 << 3)
+    cocotb.start_soon(strike())
+    await npu.write(PP_CFG, 0x5678)              # lands on the wrong register
+    st = await npu.read(STATUS)
+    assert st & BUS_ERR and st & ERR, f"STATUS = {st:#x}"
+    await npu.write(CTRL, 1)
+    assert await npu.read(STATUS) & ERR == 0
