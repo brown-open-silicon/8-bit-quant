@@ -76,7 +76,7 @@ def sites():
         add("PE pipeline", f"u_core.u_array.g_skew[{k}].g_delay.sr", 8, k)
     for n in range(N - 1):
         add("PE pipeline", f"u_core.u_array.g_deskew[{n}].g_delay.sr", 16, N - 1 - n)
-    add("PE pipeline", "u_core.u_array.vsr", LAT)
+    add("PE pipeline", "u_core.u_array.vsr", LAT)            # unused since the TMR tag valid replaced it
     add("bus/ctrl", "u_core.u_array.err", 1)
     add("accumulator", "u_core.u_acc.mem", 32, 16 * N)   # [DEPTH][N], flattened by the simulator
     add("accumulator", "u_core.u_acc.par", N, 16)

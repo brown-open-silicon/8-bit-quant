@@ -25,7 +25,7 @@ which is how long a flip can do damage.
 | PE weight registers | 512 | one K-tile (reloaded every tile) | one weight wrong until the next tile. `11` is caught | medium | already scrubbed by the per-tile reload. `11` detection | done | 0 |
 | Row-tag delay line (`tag_sr`) | 155 | 31 cycles | a result is added into the **wrong accumulator row**, or starts a fresh sum | **high** (silent) | TMR per stage (31 `tmr_reg`s, valid bits included), sticky `STATUS[8]` | **done** | +372 FFs + voters, about 0.025 mm^2 |
 | Control state (`act`, `*_pend`, `ld_run`/`ld_k`, postproc `run`/`g`) | about 40 | always live | an access is re-run or repeated (a hang was the worry; it re-captures instead) | medium | a flipped pending bit makes the request re-run (bus retry), not hang. Firmware poll timeouts | **done** (analysis + firmware) | 0 |
-| Accumulator (`accum_buf`) | 8,192 | one layer | one output neuron wrong for one image | medium (transient) | none in hardware: TMR would be about +0.8 mm^2. Optional firmware re-run-and-compare for critical inputs | firmware option | 0 |
+| Accumulator (`accum_buf`) | 8,192 | one layer | one output neuron wrong for one image | **high** (the fault campaign's top source of silent errors) | parity per word, checked on accumulate and readout, sticky `STATUS[9]`. Firmware re-runs the layer | **done** | 256 FFs + XOR trees, about 0.02 mm^2 |
 | BIAS | 768 | one 16-output group | every image in that group off by a constant | medium | parity per half-word, sticky `STATUS[6]`. Firmware rewrites BIAS (it does every group anyway) | **done** (#10) | 32 FFs + XOR, about 0.01 mm^2 |
 | PP_CFG (m, shift, relu) | 32 | whole layer | every output of the layer wrong | **high** (one bit ruins everything) | TMR with self-repair, sticky `STATUS[5]` | **done** (#10) | +64 FFs + voters, about 0.004 mm^2 |
 | Postproc pipeline, results (`q_res`, `wide_res`) | about 900 | a few cycles until the CPU reads | one output wrong once | low | none | — | 0 |
@@ -55,6 +55,24 @@ From `make quant`: 784-128-10 MNIST, random flips in stored weights only, 5 tria
 Ternary weights already degrade gracefully: a flip moves a weight by at most 1 step, or into the detected `11` code.
 **This only models weight flips.** The PP_CFG and tag rows in the table above are worse: one bit there breaks every output.
 That's why they go first, even though they hold far fewer bits.
+
+## Fault-injection results
+
+`tb/test_fault.py`: one random state bit flipped at a random cycle during MNIST layer 2 (4 images, SRAM path),
+uniform over every state bit in `wb_npu`. 1,000 trials per row, seed 1.
+
+| Design | State bits | masked | corrected | detected | **silent (SDC)** | hang |
+|---|---|---|---|---|---|---|
+| PP_CFG TMR, BIAS + WMEM parity, tag TMR | 32,423 | 86.2% | 7.8% | 3.0% | **3.0%** | 0 |
+| + accumulator parity | 32,713 | 85.8% | 8.9% | 4.7% | **0.6%** | 0 |
+
+- **First row:** 23 of the 30 silent errors were accumulator words.
+- **Second row:** accumulator parity turned them into detections (18 detected, 14 corrected, 0 silent).
+- **The 6 that remain:**
+  - 2 in the array's valid shift register. Since fixed: the accumulator now takes its valid from the TMR'd tag line.
+  - 2 in PE partial sums and 1 in a PE weight (transient, in flight).
+  - 1 in `wide_res` (a result waiting for the CPU).
+- **Corrected:** a flagged run with the right answer. That's a TMR repair, or a flip in a word that was rewritten before it mattered.
 
 ## Build order
 

@@ -101,7 +101,10 @@ module core_ternary #(
 
     accum_buf #(.N(N), .IN_W(PSUM_W), .ACC_W(ACC_W), .DEPTH(DEPTH)) u_acc (
         .clk, .rst_n,
-        .in_valid (arr_valid),
+        // valid comes from the TMR'd tag line, not the array's own (unprotected)
+        // valid shift register: same timing, and a flip there caused silent errors
+        // in the fault campaign. The array's out_valid is unused and synthesizes away.
+        .in_valid (tag_q[LAT-1][TW-1]),
         .in_first (tag_q[LAT-1][AW]),
         .in_addr  (tag_q[LAT-1][AW-1:0]),
         .in_vec   (arr_c),
