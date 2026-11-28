@@ -46,6 +46,7 @@ git push -u origin <your-name>/<short-topic>
 Then open a pull request. Rules:
 
 - No direct pushes to `main`. Every change goes through a PR with one review.
+- The `sim` check (GitHub Actions, same tests as `make sim`) must pass before merging.
 - Changes in `rtl/` need a test in `tb/` and a review from the RTL owner.
 - Don't change a register address or port listed in [docs/interfaces.md](docs/interfaces.md) without updating the doc in the same PR.
 - Don't commit build outputs (`build/`, `pnr/*/runs/`), large binaries, or anyone's personal info. This repo is public.
