@@ -42,10 +42,21 @@ Every item below has a commit, and every RTL change has a test in `tb/`. `make s
 Bus timing: register reads and BIAS writes now take 3 cycles (WMEM reads already did). Postproc latency is N+4.
 The full model costs about 0.9% more cycles per image.
 
+## P&R history (`pnr/wb_npu`, 40 MHz, worst setup slack)
+
+| Run | What changed | typical | nom_ss | max_ss | min_ss | failing endpoints (nom_ss) |
+|---|---|---|---|---|---|---|
+| r4 | baseline (main) | +6.86 | −8.73 | −10.73 | — | 1,368 |
+| r5 | BIAS write pipelined, postproc stage 3 (PR #12) | +6.51 | −9.56 | −11.23 | −7.74 | 243 |
+| r6 | 3-cycle register reads, one-hot BIAS enables, postproc lane-select stage, **post-GRT timing repair** | +9.30 | −0.80 | −1.82 | **+0.27** | 12 |
+| r7 | result latch decoupled from bus decode, plus all radiation hardware | running | | | | |
+
+- **The r6 jump** came mostly from timing repair after global routing. Before it, the tool only repaired with pre-route wire estimates, then added about 19k hold buffers that made the slow paths worse.
+- **r6's only remaining failing path** was `adr_q` → `wide_res` load enable, which r7 fixes.
+- **Hold violations** of −0.1 to −0.35 ns remain on the bus input pins at ss. They come from the tool's default 5 ns input delay, so check them against Caravel's real wrapper timing.
+
 ## Open
 
-- **Timing at the slow corners:** see the latest P&R numbers below.
-- **Accumulator path:** if routing-time repair doesn't close the accumulator path (`tag` → `accum_buf` row select, −2.4 ns in r5), pre-decode the row one cycle earlier.
 - **Caravel hardening and precheck:**
   - Needs the official `caravel_user_project` template (fixed wrapper DEF, pin order).
   - Then harden `wb_npu` as a macro inside `user_project_wrapper` and run precheck.
